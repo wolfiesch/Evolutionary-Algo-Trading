@@ -556,12 +556,149 @@ OUTPUT FORMAT (JSON only):
 
 ---
 
-## 13. Open Questions (To Resolve During Build)
+## 13. Design Decisions (Resolved)
 
-1. **Coin selection:** Dynamic (evolve which coins to trade) or static (fixed universe)?
-2. **Multi-strategy allocation:** Equal weight or fitness-weighted?
-3. **Correlation management:** How to handle when all strategies want to buy the same coin?
-4. **Fee tier optimization:** At what volume do we upgrade Bybit tier?
+*Decisions made during final review to prevent analysis paralysis during build.*
+
+### Q1: Coin Selection — Static or Dynamic?
+
+**Decision:** Static (Top 30 by Volume)
+
+**Rationale:** Dynamic selection introduces survivorship bias (bot picks coins that already pumped). For Phases 1-3:
+- Pick Top 30 coins on Bybit Futures by volume
+- Exclude stablecoins and wrapped assets
+- Lock that list for the duration of validation
+- Do NOT let the bot hunt for "new gems" yet
+
+### Q2: Multi-Strategy Allocation — Equal Weight or Fitness-Weighted?
+
+**Decision:** Equal Weight
+
+**Rationale:** Fitness-weighting is complex and prone to overfitting (giving 90% capital to a strategy that had one lucky month).
+
+**Rule:** Every active strategy gets 1 "Unit" of risk. Simple, robust.
+
+### Q3: Correlation Management — What if All Strategies Buy at Once?
+
+**Decision:** Time-Based Throttling
+
+**Rationale:** Calculating real-time correlation matrices is CPU heavy and complex.
+
+**Simple Rule:** Max 1 new position entry per 5 minutes.
+
+If the market pumps and 10 strategies trigger "Buy," the system:
+1. Takes the first one
+2. Waits 5 minutes
+3. Takes the next (if signal still valid)
+
+This prevents buying the exact top of a spike with the whole account.
+
+### Q4: Fee Tier Optimization?
+
+**Decision:** Ignore It
+
+**Rationale:** If your strategy depends on VIP fee tiers to be profitable, it is not robust.
+
+Build for base tier (0.1% maker / 0.06% taker). Any fee reduction later is bonus profit.
+
+---
+
+## 14. Operational Guidelines
+
+*Critical implementation details to get right in Phase 1.*
+
+### 14.1 Data Gap Handling (WebSocket Disconnects)
+
+**Scenario:** Bot disconnects for 5 minutes, then reconnects.
+
+**Risk:** Indicators (EMA, RSI) will be wrong because they missed data.
+
+**Mandatory Fix:**
+```python
+def on_reconnect():
+    # 1. Pause all trading
+    trading_enabled = False
+
+    # 2. Fetch last 100 candles via REST to "warm up" indicators
+    historical = fetch_historical_candles(symbol, limit=100)
+
+    # 3. Recalculate all indicators from scratch
+    recalculate_indicators(historical)
+
+    # 4. Only then resume trading
+    trading_enabled = True
+```
+
+**Rule:** On ANY reconnect, pause trading, warm up indicators, then resume.
+
+### 14.2 Directory Structure
+
+Don't dump everything in one file. Structure correctly in Week 1 to avoid pain in Month 3.
+
+```
+/crypto-alpha/
+├── /data/
+│   ├── /ingestion/          # WebSocket clients
+│   └── /storage/            # SQLite/Parquet handlers
+├── /engine/
+│   ├── /gene_pool/          # Primitive library (ema_trend, norm_rsi, etc.)
+│   └── /strategy_logic/     # JSON parsing to executable code
+├── /execution/
+│   ├── /shadow/             # Paper trading logic
+│   └── /live/               # Bybit API connectors
+├── /evolution/
+│   ├── /backtester/         # Historical simulation
+│   ├── /fitness/            # Sharpe, regime calculations
+│   └── /mutator/            # LLM prompts and parsing
+├── /risk/
+│   └── /watchdog/           # Kill switch (separate process)
+├── /logs/
+│   ├── trades.log           # Trade state vectors (JSON)
+│   └── errors.log           # Exceptions only (see 14.3)
+├── main.py
+├── config.py
+└── requirements.txt
+```
+
+### 14.3 Black Swan Error Logging
+
+**Problem:** If `trades.log` is flooded with "Heartbeat received" messages, you'll miss the critical "API Connection Refused" error at 3 AM.
+
+**Solution:** Separate `errors.log` that captures ONLY exceptions.
+
+```python
+# In config.py or logging setup
+import logging
+
+# Normal operations log
+trade_logger = logging.getLogger('trades')
+trade_handler = logging.FileHandler('logs/trades.log')
+trade_logger.addHandler(trade_handler)
+
+# Errors only log (BLACK SWAN LOG)
+error_logger = logging.getLogger('errors')
+error_handler = logging.FileHandler('logs/errors.log')
+error_handler.setLevel(logging.ERROR)  # Only ERROR and CRITICAL
+error_logger.addHandler(error_handler)
+```
+
+**Rule:** Check `errors.log` every morning. If it's not empty, something went wrong overnight.
+
+### 14.4 Phase 1 Reality Check
+
+**Phase 1 is the hardest.**
+
+You will:
+- Write the WebSocket client, and it will disconnect every 2 hours
+- Try to calculate RSI, and it won't match TradingView
+- Hit rate limits you didn't expect
+- Discover Bybit's API has quirks not in the docs
+
+**This is normal.**
+
+**Critical Rule:** Do NOT try to build the LLM part (Phase 2) until the Data/Shadow part (Phase 1) can run for **48 hours without crashing**.
+
+The "edge" is not in the LLM yet. The edge is in a system that stays online when the market is moving.
 
 ---
 
@@ -572,6 +709,8 @@ OUTPUT FORMAT (JSON only):
 | 2025-12-04 | Initial design document created | Wolfgang + Claude |
 | 2025-12-04 | Gemini review incorporated (Gene Pool v2, Shadow Trading) | Wolfgang + Claude |
 | 2025-12-04 | Final approval, incubation purgatory added | Wolfgang + Claude |
+| 2025-12-05 | Resolved open questions, added operational guidelines | Wolfgang + Claude |
+| 2025-12-05 | Added: data gap handling, directory structure, error logging | Wolfgang + Claude |
 
 ---
 
