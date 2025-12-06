@@ -13,21 +13,23 @@ def test_generate_candles_produces_correct_count():
 
 def test_bull_trend_has_positive_return():
     """Verify bull trend generates positive overall return."""
-    candles = generate_candles("TESTUSDT", count=1000, trend="bull", start_price=100.0, volatility=0.001)
+    # Use more candles and lower volatility to ensure trend dominates
+    candles = generate_candles("TESTUSDT", count=5000, trend="bull", start_price=100.0, volatility=0.0005)
     initial_price = candles[0].open
     final_price = candles[-1].close
 
-    # Bull market should have positive return
+    # Bull market should have positive return over long enough period
     assert final_price > initial_price, f"Bull trend should increase: {initial_price} -> {final_price}"
 
 
 def test_bear_trend_has_negative_return():
     """Verify bear trend generates negative overall return."""
-    candles = generate_candles("TESTUSDT", count=1000, trend="bear", start_price=100.0, volatility=0.001)
+    # Use more candles and lower volatility to ensure trend dominates
+    candles = generate_candles("TESTUSDT", count=5000, trend="bear", start_price=100.0, volatility=0.0005)
     initial_price = candles[0].open
     final_price = candles[-1].close
 
-    # Bear market should have negative return
+    # Bear market should have negative return over long enough period
     assert final_price < initial_price, f"Bear trend should decrease: {initial_price} -> {final_price}"
 
 

@@ -18,17 +18,20 @@ def candles_to_df(candles: list) -> pd.DataFrame:
     return pd.DataFrame(data)
 
 
-def test_btc_trend_bull_market(btc_bull):
-    """btc_trend returns +1.0 in BTC bull market."""
-    df = candles_to_df(btc_bull)
+def test_btc_trend_bull_market():
+    """btc_trend returns +1.0 in deterministic BTC uptrend."""
+    # Use deterministic data to ensure test reliability
+    df = pd.DataFrame({
+        'open': [40000.0 + i * 20 for i in range(200)],
+        'high': [40050.0 + i * 20 for i in range(200)],
+        'low': [39950.0 + i * 20 for i in range(200)],
+        'close': [40000.0 + i * 20 for i in range(200)],  # Clear uptrend
+        'volume': [1000.0] * 200,
+    })
 
-    # Verify market is actually bullish
-    assert df['close'].iloc[-1] > df['close'].iloc[0], "Bull market should have rising prices"
-
-    # In a bull market with rising prices, the trend should be positive
-    # However, due to random volatility, we check that the function executes
+    # Clear uptrend should return +1.0
     result = btc_trend(df, window=100)
-    assert result in [1.0, -1.0], "btc_trend must return either +1.0 or -1.0"
+    assert result == 1.0, f"Clear uptrend should return +1.0, got {result}"
 
 
 def test_btc_trend_bear_market(btc_bear):
