@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from enum import Enum
 import pandas as pd
 
-from engine.gene_pool import trend, mean_reversion, volume, volatility, market_filter
+from shared.engine.gene_pool import trend, mean_reversion, volume, volatility
+from engine.gene_pool import market_filter
 
 
 class Signal(Enum):

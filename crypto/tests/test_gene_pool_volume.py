@@ -3,7 +3,7 @@ import pytest
 import pandas as pd
 import numpy as np
 
-from engine.gene_pool.volume import volume_intensity, vwap_distance
+from shared.engine.gene_pool.volume import volume_intensity, vwap_distance
 from data.storage.models import Candle
 
 

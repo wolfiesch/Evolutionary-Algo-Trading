@@ -2,7 +2,7 @@
 import pytest
 import pandas as pd
 
-from engine.gene_pool.volatility import atr_regime, atr_percentile
+from shared.engine.gene_pool.volatility import atr_regime, atr_percentile
 
 
 def candles_to_df(candles):

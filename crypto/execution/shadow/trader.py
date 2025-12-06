@@ -9,7 +9,8 @@ import pandas as pd
 
 from .position import Position
 from engine.strategy_logic.parser import Strategy, Signal, GeneExpressionParser
-from engine.gene_pool import market_filter, volatility
+from engine.gene_pool import market_filter
+from shared.engine.gene_pool import volatility
 from config import settings
 
 

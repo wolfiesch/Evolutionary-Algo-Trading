@@ -1,7 +1,7 @@
 """Tests for mean reversion primitives."""
 import pytest
 import pandas as pd
-from engine.gene_pool.mean_reversion import norm_rsi, bb_position, bb_width_percentile
+from shared.engine.gene_pool.mean_reversion import norm_rsi, bb_position, bb_width_percentile
 
 
 def candles_to_df(candles):

@@ -2,7 +2,7 @@
 import pandas as pd
 import pytest
 
-from engine.gene_pool.trend import ema_trend, price_position
+from shared.engine.gene_pool.trend import ema_trend, price_position
 
 
 def candles_to_df(candles: list) -> pd.DataFrame:

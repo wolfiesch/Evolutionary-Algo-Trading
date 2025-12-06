@@ -24,12 +24,12 @@ TEST_STRATEGY = {
     "exit_short": None,
 }
 
-# Top 30 Bybit Futures by volume (Phase 1 static universe)
+# Top 29 Bybit Futures by volume (Phase 1 static universe)
 # [*TO-DO*] - Fetch dynamically from Bybit API in Phase 2
 SYMBOLS = [
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT",
     "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT", "MATICUSDT",
-    "SHIBUSDT", "LTCUSDT", "ATOMUSDT", "UNIUSDT", "ETCUSDT",
+    "LTCUSDT", "ATOMUSDT", "UNIUSDT", "ETCUSDT",
     "XLMUSDT", "NEARUSDT", "APTUSDT", "FILUSDT", "ARBUSDT",
     "OPUSDT", "INJUSDT", "SUIUSDT", "STXUSDT", "IMXUSDT",
     "LDOUSDT", "RNDRUSDT", "SEIUSDT", "TIAUSDT", "JUPUSDT",
