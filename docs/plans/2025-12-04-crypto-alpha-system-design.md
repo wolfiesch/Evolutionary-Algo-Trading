@@ -292,7 +292,7 @@ Every trade (shadow or real) logs full state:
 - Trade count ≥ 100 (backtest + shadow combined)
 - Max drawdown < 20%
 - Profit factor > 1.0
-- **Per-regime Sharpe > 0.5** (no hiding losses in averages)
+- **Per-regime Sharpe > 0.6** (no hiding losses in averages) *(updated per X feedback)*
 
 **Composite Score:**
 ```python
@@ -305,9 +305,9 @@ def fitness(results):
     if results.profit_factor < 1.0:
         return -999
 
-    # Regime consistency check
+    # Regime consistency check (updated: 0.5 → 0.6 per X feedback)
     for regime in REGIMES:
-        if results.regime_sharpe[regime] < 0.5:
+        if results.regime_sharpe[regime] < 0.6:
             return -999  # Bleeding in any regime = kill
 
     # Weighted score
@@ -351,7 +351,7 @@ def classify_regime(btc_data, window=168):  # 1 week hourly
 | Complexity penalty | Max 5 primitives per strategy |
 | Parameter stability | RSI(14) must be similar to RSI(13,15) |
 | Out-of-sample holdout | 20% of data never seen during evolution |
-| **Incubation purgatory** | 7-day virtual trading before shadow pool |
+| **Incubation purgatory** | 14-day virtual trading before shadow pool *(updated per X feedback)* |
 
 ### 7.4 Incubation Process
 
@@ -359,7 +359,7 @@ def classify_regime(btc_data, window=168):  # 1 week hourly
 Backtest Pass
      │
      ▼
-Incubation Queue (7 days of paper trading)
+Incubation Queue (14 days of paper trading)  ← Updated per X feedback
      │
      ▼
 Compare: Incubation Sharpe vs Backtest Sharpe
@@ -369,11 +369,11 @@ Compare: Incubation Sharpe vs Backtest Sharpe
      └─── If Incubation ≥ 50% of Backtest → Promote to Shadow Pool
 ```
 
-### 7.5 Evolution Cycle (Daily)
+### 7.5 Evolution Cycle (Every 48 Hours) ← *Updated per X feedback: "Daily is aggressive"*
 
 ```
 1. GATHER
-   └─ Collect last 24h of shadow trade logs
+   └─ Collect last 48h of shadow trade logs
 
 2. EVALUATE
    └─ Calculate fitness for each active strategy
@@ -392,7 +392,7 @@ Compare: Incubation Sharpe vs Backtest Sharpe
    └─ Regime testing (must pass 4/5)
 
 6. INCUBATE
-   └─ Passing variants enter 7-day incubation
+   └─ Passing variants enter 14-day incubation
    └─ Compare to backtest expectations
 
 7. DEPLOY
@@ -711,6 +711,135 @@ The "edge" is not in the LLM yet. The edge is in a system that stays online when
 | 2025-12-04 | Final approval, incubation purgatory added | Wolfgang + Claude |
 | 2025-12-05 | Resolved open questions, added operational guidelines | Wolfgang + Claude |
 | 2025-12-05 | Added: data gap handling, directory structure, error logging | Wolfgang + Claude |
+| 2025-12-05 | Grok/X community feedback incorporated (Section 15) | Wolfgang + Claude + Grok |
+| 2025-12-05 | Updated: incubation 7→14 days, regime Sharpe 0.5→0.6, evolution 24h→48h | Wolfgang + Claude |
+
+---
+
+## 15. Community Feedback (Quant Twitter/X)
+
+*Compiled 2025-12-05 via Grok analysis of hundreds of posts from verified quants, traders, and AI researchers.*
+
+### 15.1 Overall Assessment
+
+> "This is one of the most thoughtful and robust trading system designs I've reviewed in years—especially for a crypto-focused algo... The ProFiT-inspired evolutionary approach is cutting-edge... It's not just hype; it's a systematic way to discover non-obvious edges while mitigating human bias."
+
+**Key Validations:**
+- Gene Pool constraints praised: "Limiting to validated primitives prevents LLM hallucinations"
+- Risk Engine rated "top-tier" and "fund-level controls"
+- Regime testing approach called "elite"
+- Incubation purgatory described as "a gem"
+- Operational guidelines rated "gold"
+
+### 15.2 Recommended Enhancements (Phase 2+)
+
+Based on X community insights, queue these improvements for after Phase 1 stability:
+
+#### Gene Pool Expansion (Phase 2)
+Add crypto-specific primitives that capture unique market dynamics:
+
+```python
+# ═══════════════════════════════════════════════════════════
+# FUNDING (Crypto-specific edge)
+# ═══════════════════════════════════════════════════════════
+def funding_rate_percentile(period: int) -> float:
+    """Current funding rate vs historical, 0.0 to 1.0
+    High funding = crowded longs, reversal risk"""
+    pass
+
+# ═══════════════════════════════════════════════════════════
+# ORDER FLOW (CVD divergence)
+# ═══════════════════════════════════════════════════════════
+def order_imbalance(period: int) -> float:
+    """Cumulative Volume Delta divergence from price
+    Returns -1.0 to +1.0 based on buy/sell pressure"""
+    pass
+```
+
+**Rationale:** X quants emphasize funding rates as "useful signal" and order flow (CVD divergence) as crypto-native edge.
+
+#### Float Parameters (Phase 2)
+Allow constrained float ranges for select primitives with stability checks:
+
+| Primitive | Allowed Range | Stability Check |
+|-----------|---------------|-----------------|
+| `bb_position(period, std)` | std: 1.5-2.5 | Must pass at 1.5, 2.0, and 2.5 |
+| `volume_intensity(period, threshold)` | threshold: 1.5-3.0 | ±0.5 must yield similar results |
+
+#### Regime-Specific Slippage Model (Phase 3)
+Current: Flat 0.15% slippage estimate
+Enhanced: Use historical Bybit data to model regime-specific slippage:
+
+| Regime | Estimated Slippage |
+|--------|-------------------|
+| bull_calm | 0.10% |
+| bull_volatile | 0.20% |
+| bear_calm | 0.12% |
+| bear_volatile | 0.25% |
+| sideways | 0.10% |
+
+#### Exchange Failover (Phase 3)
+Add abstraction layer for exchange redundancy:
+
+```python
+class ExchangeRouter:
+    """Failover to backup exchange if primary is down."""
+    primary: Exchange = Bybit()
+    backup: Exchange = Binance()  # via CCXT
+
+    def execute(self, order):
+        try:
+            return self.primary.execute(order)
+        except ExchangeUnavailable:
+            log.error("Primary exchange down, failover to backup")
+            return self.backup.execute(order)
+```
+
+#### Post-Live Evolution Trigger (Phase 4)
+Add automatic re-evolution when performance degrades:
+
+```python
+def check_strategy_health(strategy_id, lookback_trades=50):
+    """Trigger re-evolution if strategy degrades."""
+    recent_pf = calculate_profit_factor(last_n_trades=lookback_trades)
+    baseline_pf = strategy.shadow_phase_pf
+
+    if recent_pf < baseline_pf * 0.80:  # 20% degradation
+        log.warning(f"Strategy {strategy_id} degraded, triggering re-evolution")
+        evolution_queue.add(strategy_id, priority="high")
+```
+
+### 15.3 Parameter Updates (Incorporated)
+
+Based on community feedback, the following parameters have been updated:
+
+| Parameter | Original | Updated | Source |
+|-----------|----------|---------|--------|
+| Incubation period | 7 days | **14 days** | "More data for validation" |
+| Min per-regime Sharpe | 0.5 | **0.6** | "Bleeding in any regime = kill" |
+| Evolution cycle | Daily | **Every 48h** | "Daily is aggressive" |
+
+### 15.4 Community Warnings
+
+| Warning | Our Mitigation |
+|---------|----------------|
+| "LLMs are biased predictors, need new architectures for consistent alpha" | BTC filter + regime checks add robustness |
+| "Retail dominated = traps" | Long-only avoids short squeeze traps |
+| "Backtest overfitting ubiquitous" | Walk-forward, OOS holdout, incubation |
+| "Phase 1 plumbing takes longer than planned" | 48-hour stability gate before Phase 2 |
+| "API quirks not in docs" | Abstract exchange layer, error logging |
+
+### 15.5 Validation from X Community
+
+Key quotes from verified quant accounts:
+
+- **On LLM/Evolutionary approach:** "Papers like 'Evolution Strategies at Scale' (outperforms RL) and ProFiT are hyped—constrained gene pool mirrors this best practice."
+
+- **On regime testing:** "Profitable in bull/bear/sideways = real edge" — Matches our 4/5 regime requirement.
+
+- **On risk controls:** "Kill switches for flash crashes, position sizing via ATR" — Our watchdog process implements exactly this.
+
+- **On Phase 1 reality:** "Don't build LLM before data pipeline runs 48h crash-free" — Already in our Phase 1 Reality Check section.
 
 ---
 
@@ -719,7 +848,8 @@ The "edge" is not in the LLM yet. The edge is in a system that stays online when
 - [Oil-Stonks Design](./2025-12-04-oil-stonks-design.md) — Original equities project (paused)
 - [ProFiT Research Analysis](./2025-12-04-profit-research-analysis.md) — Initial ProFiT paper review
 - [ProFiT Review Findings](./2025-12-04-profit-review-findings.md) — Critical review of ProFiT approach
+- [Phase 1 Implementation Plan](./2025-12-05-phase1-implementation-plan.md) — Detailed build plan with Codex batching
 
 ---
 
-*Document approved for development. Start Phase 1.*
+*Document approved for development. Community feedback incorporated 2025-12-05. Start Phase 1.*
