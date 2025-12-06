@@ -121,18 +121,31 @@ class ShadowTrader:
         return None
 
     def _classify_regime(self, btc_candles: pd.DataFrame, atr_regime: float) -> str:
-        """Classify current market regime."""
-        if len(btc_candles) < 168:  # 1 week of hourly
+        """Classify current market regime.
+
+        Uses 24-hour lookback for 1-minute candles (1440 bars).
+        A week would be 10080 bars but that's excessive for our 200-bar buffer.
+        24h is sufficient to detect regime shifts and fits within typical data windows.
+        """
+        # 24 hours of 1-minute candles = 24 * 60 = 1440 bars
+        # But since we typically only have 200 bars, use a shorter 4-hour window (240 bars)
+        # with proportionally scaled thresholds
+        lookback = min(240, len(btc_candles) - 1)  # 4 hours of 1-min candles
+        if lookback < 60:  # Need at least 1 hour of data
             return "unknown"
 
-        btc_trend = btc_candles["close"].iloc[-1] / btc_candles["close"].iloc[-168] - 1
+        btc_trend = btc_candles["close"].iloc[-1] / btc_candles["close"].iloc[-lookback] - 1
 
-        if btc_trend > 0.05:
+        # Scale thresholds: 5% weekly ≈ 0.7% daily ≈ 0.12% per 4 hours
+        # Use 1% threshold for 4-hour window to detect meaningful moves
+        threshold = 0.01
+
+        if btc_trend > threshold:
             if atr_regime > 0:
                 return "bull_volatile"
             else:
                 return "bull_calm"
-        elif btc_trend < -0.05:
+        elif btc_trend < -threshold:
             if atr_regime > 0:
                 return "bear_volatile"
             else:

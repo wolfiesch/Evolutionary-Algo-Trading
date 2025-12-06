@@ -191,8 +191,11 @@ class BybitWebSocketClient:
                     logger.error(f"Error fetching historical for {symbol}: {result}")
                 else:
                     logger.info(f"Fetched {len(result)} historical candles for {symbol}")
-                    # Emit historical candles via callback
-                    for candle in result:
+                    # Bybit REST returns candles newest-first, but callbacks expect
+                    # chronological order (oldest-first) so validator state is seeded
+                    # with the most recent timestamp, not the oldest
+                    sorted_candles = sorted(result, key=lambda c: c.timestamp)
+                    for candle in sorted_candles:
                         try:
                             await self.on_candle(candle)
                         except Exception as e:
