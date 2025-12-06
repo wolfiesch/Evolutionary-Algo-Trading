@@ -211,6 +211,29 @@ class TestShadowTrader:
         signal = trader.process_candle("NEWCOINUSDT", oversold_candles, btc_uptrend)
         assert signal is None
 
+    def test_max_exposure_includes_pending_trade(self, trader, oversold_candles, btc_uptrend):
+        """Test that exposure check includes pending trade size, not just current exposure.
+
+        Bug fix: Previously, if current exposure was 49.5% and max was 50%, a 1% position
+        would be allowed, pushing total to 50.5%. Now it correctly rejects.
+        """
+        # Create position using 49.5% of equity (just under max)
+        # Position size is min(risk_per_trade=1%, max_position_pct=10%) = 1% = $100
+        # So current exposure needs to be > 49% for pending trade to breach 50% max
+        trader.positions["BIGUSDT"] = Position(
+            symbol="BIGUSDT",
+            strategy_id="test",
+            entry_time=1701820000000,
+            entry_price=100.0,
+            size_usdt=4950.0,  # 49.5% of 10000
+        )
+
+        # Current exposure is 49.5%, pending trade would add 1% (risk_per_trade=1%)
+        # Total would be 50.5% which exceeds 50% max exposure
+        signal = trader.process_candle("NEWCOINUSDT", oversold_candles, btc_uptrend)
+        assert signal is None, "Entry should be rejected when pending trade would breach max exposure"
+        assert "NEWCOINUSDT" not in trader.positions
+
     def test_friction_applied_on_entry(self, trader, oversold_candles, btc_uptrend):
         """Test that friction is applied on entry (higher fill price)."""
         current_price = oversold_candles["close"].iloc[-1]

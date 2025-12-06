@@ -155,15 +155,22 @@ class ShadowTrader:
             return None
 
         current_exposure = sum(p.size_usdt for p in self.positions.values())
-        if current_exposure / self.equity >= self.max_exposure:
-            logger.info(f"Max exposure ({self.max_exposure:.0%}) reached, skipping entry for {symbol}")
-            return None
 
         # Calculate position size (1% risk, max 10% position)
         position_size = min(
             self.equity * self.risk_per_trade,
             self.equity * self.max_position_pct,
         )
+
+        # Check if adding this position would breach max exposure
+        pending_exposure = (current_exposure + position_size) / self.equity
+        if pending_exposure > self.max_exposure:
+            logger.info(
+                f"Entry would breach max exposure ({self.max_exposure:.0%}): "
+                f"current={current_exposure/self.equity:.1%} + pending={position_size/self.equity:.1%} "
+                f"= {pending_exposure:.1%}, skipping {symbol}"
+            )
+            return None
 
         # Apply friction (buy at higher price)
         fill_price = price * (1 + self.friction_per_side)
