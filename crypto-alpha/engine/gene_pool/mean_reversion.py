@@ -1,6 +1,7 @@
 """Mean reversion primitives for gene pool."""
 import pandas as pd
-import pandas_ta as ta
+from ta.momentum import RSIIndicator
+from ta.volatility import BollingerBands
 
 
 def norm_rsi(candles: pd.DataFrame, period: int) -> float:
@@ -18,8 +19,8 @@ def norm_rsi(candles: pd.DataFrame, period: int) -> float:
     if len(candles) < period:
         return 0.0
 
-    # Calculate RSI using pandas_ta
-    rsi_series = ta.rsi(candles['close'], length=period)
+    # Calculate RSI using ta library
+    rsi_series = RSIIndicator(candles['close'], window=period).rsi()
 
     # Get the last RSI value
     if rsi_series is None or len(rsi_series) == 0:
@@ -60,25 +61,13 @@ def bb_position(candles: pd.DataFrame, period: int, std: float) -> float:
     if len(candles) < period:
         return 0.0
 
-    # Calculate Bollinger Bands using pandas_ta
-    # Returns DataFrame with columns: BBL_{period}_{std}, BBM_{period}_{std}, BBU_{period}_{std}
-    bb = ta.bbands(candles['close'], length=period, std=std)
-
-    if bb is None or len(bb) == 0:
-        return 0.0
+    # Calculate Bollinger Bands using ta library
+    bb = BollingerBands(candles['close'], window=period, window_dev=std)
 
     # Get the last values
-    # pandas_ta uses format like "BBL_20_2.0_2.0" (period_std_std)
-    lower_col = f"BBL_{period}_{std}_{std}"
-    middle_col = f"BBM_{period}_{std}_{std}"
-    upper_col = f"BBU_{period}_{std}_{std}"
-
-    if lower_col not in bb.columns or middle_col not in bb.columns or upper_col not in bb.columns:
-        return 0.0
-
-    lower = bb[lower_col].iloc[-1]
-    middle = bb[middle_col].iloc[-1]
-    upper = bb[upper_col].iloc[-1]
+    lower = bb.bollinger_lband().iloc[-1]
+    middle = bb.bollinger_mavg().iloc[-1]
+    upper = bb.bollinger_hband().iloc[-1]
     current_price = candles['close'].iloc[-1]
 
     # Handle NaN values
@@ -94,7 +83,6 @@ def bb_position(candles: pd.DataFrame, period: int, std: float) -> float:
 
     # Calculate position within bands
     # Position = (price - middle) / (half_width)
-    # where half_width = (upper - middle) or (middle - lower), they should be equal
     half_width = (upper - middle)
 
     if half_width <= 0:
@@ -126,20 +114,10 @@ def bb_width_percentile(candles: pd.DataFrame, period: int, lookback: int = 100)
         return 0.5
 
     # Calculate Bollinger Bands
-    bb = ta.bbands(candles['close'], length=period, std=2.0)
-
-    if bb is None or len(bb) == 0:
-        return 0.5
-
-    # pandas_ta uses format like "BBL_20_2.0_2.0" (period_std_std)
-    lower_col = f"BBL_{period}_2.0_2.0"
-    upper_col = f"BBU_{period}_2.0_2.0"
-
-    if lower_col not in bb.columns or upper_col not in bb.columns:
-        return 0.5
+    bb = BollingerBands(candles['close'], window=period, window_dev=2.0)
 
     # Calculate band width series
-    band_width = bb[upper_col] - bb[lower_col]
+    band_width = bb.bollinger_hband() - bb.bollinger_lband()
 
     # Get the last lookback values
     recent_widths = band_width.iloc[-lookback:]

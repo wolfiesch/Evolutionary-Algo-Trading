@@ -1,0 +1,19 @@
+# fly.toml - Crypto Alpha Trading System
+# Background worker deployed to Frankfurt (non-US)
+
+app = 'crypto-alpha'
+primary_region = 'fra'
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PYTHONUNBUFFERED = "1"
+
+# Background worker - no HTTP service needed
+# The app runs continuously processing WebSocket data
+
+[[vm]]
+  memory = '512mb'
+  cpu_kind = 'shared'
+  cpus = 1

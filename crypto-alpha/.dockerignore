@@ -1,0 +1,33 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.pytest_cache
+.coverage
+htmlcov
+.mypy_cache
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Local data
+data/*.db
+logs/*.log
+logs/*.jsonl
+
+# Tests (optional - could exclude for smaller image)
+# tests/
+
+# Docs
+*.md
+docs/

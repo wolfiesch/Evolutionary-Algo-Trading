@@ -1,6 +1,7 @@
 """Trend primitives for gene pool."""
 import pandas as pd
-import pandas_ta as ta
+from ta.trend import EMAIndicator
+from ta.volatility import AverageTrueRange
 
 
 def ema_trend(candles: pd.DataFrame, fast: int, slow: int) -> float:
@@ -22,13 +23,9 @@ def ema_trend(candles: pd.DataFrame, fast: int, slow: int) -> float:
     if len(candles) < slow:
         return 0.0
 
-    # Calculate EMAs
-    fast_ema = ta.ema(candles['close'], length=fast)
-    slow_ema = ta.ema(candles['close'], length=slow)
-
-    # Check if we have valid EMA values
-    if fast_ema is None or slow_ema is None:
-        return 0.0
+    # Calculate EMAs using ta library
+    fast_ema = EMAIndicator(candles['close'], window=fast).ema_indicator()
+    slow_ema = EMAIndicator(candles['close'], window=slow).ema_indicator()
 
     # Get the most recent values
     current_fast = fast_ema.iloc[-1]
@@ -62,13 +59,11 @@ def price_position(candles: pd.DataFrame, period: int) -> float:
     if len(candles) < period:
         return 0.0
 
-    # Calculate EMA and ATR
-    ema = ta.ema(candles['close'], length=period)
-    atr = ta.atr(candles['high'], candles['low'], candles['close'], length=period)
-
-    # Check if we have valid values
-    if ema is None or atr is None:
-        return 0.0
+    # Calculate EMA and ATR using ta library
+    ema = EMAIndicator(candles['close'], window=period).ema_indicator()
+    atr = AverageTrueRange(
+        candles['high'], candles['low'], candles['close'], window=period
+    ).average_true_range()
 
     # Get the most recent values
     current_price = candles['close'].iloc[-1]

@@ -1,6 +1,6 @@
 """Volatility primitives for gene pool."""
 import pandas as pd
-import pandas_ta as ta
+from ta.volatility import AverageTrueRange
 
 
 def atr_regime(candles: pd.DataFrame, period: int, lookback: int = 100) -> float:
@@ -23,13 +23,13 @@ def atr_regime(candles: pd.DataFrame, period: int, lookback: int = 100) -> float
     if len(candles) < min_required:
         return 0.0
 
-    # Calculate ATR
-    atr = ta.atr(
+    # Calculate ATR using ta library
+    atr = AverageTrueRange(
         high=candles["high"],
         low=candles["low"],
         close=candles["close"],
-        length=period
-    )
+        window=period
+    ).average_true_range()
 
     # Get the last lookback ATR values (excluding NaN from start)
     atr_history = atr.dropna().tail(lookback)
@@ -72,13 +72,13 @@ def atr_percentile(candles: pd.DataFrame, period: int, lookback: int = 100) -> f
     if len(candles) < min_required:
         return 0.5
 
-    # Calculate ATR
-    atr = ta.atr(
+    # Calculate ATR using ta library
+    atr = AverageTrueRange(
         high=candles["high"],
         low=candles["low"],
         close=candles["close"],
-        length=period
-    )
+        window=period
+    ).average_true_range()
 
     # Get the last lookback ATR values (excluding NaN from start)
     atr_history = atr.dropna().tail(lookback)

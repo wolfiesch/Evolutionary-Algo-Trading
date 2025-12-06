@@ -1,6 +1,6 @@
 """Market filter primitives for gene pool."""
 import pandas as pd
-import pandas_ta as ta
+from ta.trend import EMAIndicator
 
 
 def btc_trend(btc_candles: pd.DataFrame, window: int) -> float:
@@ -32,16 +32,12 @@ def btc_trend(btc_candles: pd.DataFrame, window: int) -> float:
     if len(btc_candles) < window:
         return -1.0  # Conservative default
 
-    # Calculate long EMA
-    long_ema = ta.ema(btc_candles['close'], length=window)
+    # Calculate long EMA using ta library
+    long_ema = EMAIndicator(btc_candles['close'], window=window).ema_indicator()
 
     # Calculate short EMA (window // 4, min 5)
     short_window = max(window // 4, 5)
-    short_ema = ta.ema(btc_candles['close'], length=short_window)
-
-    # Check if we have valid EMA values
-    if long_ema is None or short_ema is None:
-        return -1.0
+    short_ema = EMAIndicator(btc_candles['close'], window=short_window).ema_indicator()
 
     # Get the most recent values
     current_price = btc_candles['close'].iloc[-1]
@@ -62,4 +58,3 @@ def btc_trend(btc_candles: pd.DataFrame, window: int) -> float:
         return 1.0
     else:
         return -1.0
-

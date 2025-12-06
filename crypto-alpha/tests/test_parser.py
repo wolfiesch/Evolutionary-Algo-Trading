@@ -309,12 +309,24 @@ class TestSignalGeneration:
         """Should return HOLD when exit condition not met and has position."""
         strategy = parser.parse(valid_strategy_json)
 
-        # Create neutral candles that won't trigger exit (RSI should be around 0, not > 0.4)
+        # Create candles with alternating moves for neutral RSI (around 50)
+        # Exit condition is norm_rsi(14) > 0.4, which means RSI > 70
+        # We want RSI around 50 (norm_rsi = 0)
+        closes = []
+        price = 100.0
+        for i in range(50):
+            # Alternate up and down to keep RSI neutral
+            if i % 2 == 0:
+                price *= 1.005  # +0.5%
+            else:
+                price *= 0.995  # -0.5%
+            closes.append(price)
+
         neutral_candles = pd.DataFrame({
             'open': [100.0] * 50,
-            'high': [101.0] * 50,
-            'low': [99.0] * 50,
-            'close': [100.0] * 50,  # Flat prices = neutral RSI
+            'high': [c * 1.01 for c in closes],
+            'low': [c * 0.99 for c in closes],
+            'close': closes,
             'volume': [1000.0] * 50,
         })
 
