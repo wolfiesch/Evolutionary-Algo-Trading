@@ -1,0 +1,27 @@
+# Core
+python-dotenv==1.0.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# Data
+pandas==2.1.3
+numpy==1.26.2
+sqlite-utils==3.35.2
+
+# WebSocket
+websockets==12.0
+aiohttp==3.9.1
+
+# Technical Analysis
+pandas-ta==0.3.14b0
+
+# Logging
+structlog==23.2.0
+
+# Testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+
+# Type checking
+mypy==1.7.1
