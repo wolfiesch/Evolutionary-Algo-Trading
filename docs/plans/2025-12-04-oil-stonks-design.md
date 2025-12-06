@@ -394,11 +394,129 @@ Oil-Stonks/
 
 ---
 
+## 12. Critical Review Findings & Required Fixes
+
+*Based on quant-style critical review (2025-12-05). Issues prioritized by impact on backtest validity.*
+
+### 12.1 CRITICAL: Data Integrity Issues (Must Fix Before Any Backtest)
+
+| Issue | Problem | Required Fix |
+|-------|---------|--------------|
+| **Look-ahead bias** | Using "current market cap" with historical FCF mixes present-day shares/prices with past fundamentals | Use point-in-time (PIT) market cap: shares outstanding × price, both as-of calculation date |
+| **No filing date lags** | Fundamentals used immediately when "available" but weren't public yet | Lag all fundamental data by filing date + 1 day; typical 10-Q filed 30-45 days after quarter end |
+| **Survivorship bias** | Static universe ignores delistings, mergers, bankruptcies | Build dynamic universe with reconstitution dates; include dead companies that existed during backtest period |
+| **Corporate actions** | Splits, dividends, spin-offs not handled | Use adjusted prices/volumes; track share count changes; handle special dividends explicitly |
+| **Manual data timestamps** | Breakeven/hedging data has no version history | **Defer breakeven/hedging factors** until we can source with timestamps, OR exclude from backtest entirely |
+
+**Decision:** For MVP backtest, use only API-sourced factors (FCF yield, debt/EBITDA) with proper PIT handling. Breakeven and hedging factors are forward-looking only (not backtested).
+
+### 12.2 HIGH: Methodology Weaknesses
+
+| Issue | Problem | Required Fix |
+|-------|---------|--------------|
+| **Factors not validated** | No evidence these factors predict returns; equal weighting is arbitrary | After backtest: calculate Information Coefficients (IC), t-stats, and factor decay for each factor |
+| **Technical signals collinear** | Trend + momentum both measure price direction; double-counting | Reduce technical weight OR orthogonalize signals; consider replacing with single trend-following signal |
+| **Small universe instability** | Percentile ranks with 10-15 names are noisy; one outlier breaks ranking | Use z-scores with winsorization instead of percentiles; require minimum 20+ names for stable ranks |
+| **Horizon mismatch** | Weekly rebalancing with quarterly fundamentals is incoherent | Fundamentals change monthly ranking only when new filings; technicals drive weekly signal |
+| **No commodity beta model** | All E&P stocks correlate with oil; factors may just proxy WTI exposure | Track and report portfolio beta to WTI; consider beta-neutral version as robustness check |
+
+### 12.3 HIGH: Execution Reality
+
+| Issue | Problem | Required Fix |
+|-------|---------|--------------|
+| **Unrealistic costs** | 0.1% TC / 0.05% slippage is fantasy for small-caps in stress | Tier by market cap: Large (0.1%/0.05%), Mid (0.2%/0.1%), Small (0.3%/0.2%); stress scenarios at 2-3x |
+| **No ADV constraints** | 15-20% positions in small caps will move markets | Max position = 1% of 20-day ADV; flag illiquid names |
+| **No event handling** | Trading into earnings/OPEC/EIA without plan | Backtest should flag trades within 2 days of earnings; consider earnings blackout |
+
+### 12.4 MEDIUM: Risk Model Gaps
+
+| Issue | Problem | Required Fix |
+|-------|---------|--------------|
+| **No factor attribution** | Can't tell which factors drive returns | Implement Brinson-style attribution: separate selection vs. timing vs. factor contributions |
+| **Vol-scaling absent** | Equal weight ignores volatility differences | Consider inverse-volatility weighting as alternative to equal weight |
+| **Drawdown rules vague** | "Pause and review" isn't a rule | Define explicit deleveraging: -20% drawdown → reduce to 50% invested; -30% → go to cash |
+
+### 12.5 Revised Factor Design
+
+Given data constraints, **Phase 1 will use only these backtestable factors:**
+
+**Fundamental (API-sourced, PIT-compliant):**
+- FCF Yield (50% of fundamental score)
+- Debt/EBITDA (50% of fundamental score)
+
+**Technical (price/volume only):**
+- Trend: Price vs. 50/200 SMA (50% of technical score)
+- Momentum: 1-month return rank (50% of technical score) — simpler, less collinear than RSI/MACD
+
+**Breakeven & Hedging:** Forward-looking decision support only (not backtested)
+
+### 12.6 Revised Backtest Parameters
+
+| Parameter | Original | Revised |
+|-----------|----------|---------|
+| Transaction costs | 0.1% flat | Tiered: 0.1% / 0.2% / 0.3% by cap |
+| Slippage | 0.05% flat | Tiered: 0.05% / 0.1% / 0.2% by cap |
+| Fundamental lag | None | Filing date + 1 day |
+| Universe | Static 15 | Dynamic with reconstitution |
+| Walk-forward | Single split | Rolling 12-month windows |
+| Position limit | None | Max 1% of 20-day ADV |
+
+---
+
+## 13. Revised Implementation Phases
+
+*Updated to address critical data integrity issues first.*
+
+### Phase 0: Data Infrastructure (NEW - Required First)
+- [ ] Research PIT data options (EODHD limitations, alternatives: Sharadar, Quandl, Tiingo)
+- [ ] Implement corporate actions handling (splits, dividends)
+- [ ] Build dynamic universe with historical constituents and delisting dates
+- [ ] Create filing date calendar for fundamental data lag
+- [ ] Set up data validation tests (no future data leakage)
+
+### Phase 1: Foundation (MVP) — Revised
+- [ ] Set up project structure and dependencies
+- [ ] Implement price/volume fetcher with adjusted prices
+- [ ] Implement simplified fundamental fetcher (FCF, debt) with PIT handling
+- [ ] Implement oil price fetcher (WTI)
+- [ ] Build simplified scoring: 2 fundamental + 2 technical factors only
+- [ ] Tiered transaction cost model by market cap
+- [ ] Basic backtest with dynamic universe
+
+### Phase 2: Validation
+- [ ] Calculate factor ICs and t-stats
+- [ ] Measure factor decay over holding periods
+- [ ] Rolling walk-forward validation (not single split)
+- [ ] Sensitivity analysis on weights and thresholds
+- [ ] Report portfolio beta to WTI and SPY
+- [ ] Stress-test execution costs at 2-3x normal
+
+### Phase 3: Refinement
+- [ ] Add additional factors if Phase 2 shows predictive value
+- [ ] Consider vol-weighting or other position sizing
+- [ ] Implement explicit drawdown rules
+- [ ] Add factor attribution reporting
+
+### Phase 4: Forward-Looking Features (Not Backtested)
+- [ ] Add breakeven/hedging as decision-support factors
+- [ ] Manual data entry with timestamps
+- [ ] Earnings calendar integration
+- [ ] OPEC/EIA event calendar
+
+### Phase 5: Decision Support UI
+- [ ] Build Streamlit dashboard
+- [ ] Display backtest results with caveats
+- [ ] Forward-looking rankings with all factors
+- [ ] Individual stock drill-down
+
+---
+
 ## Changelog
 
 | Date | Change | Author |
 |------|--------|--------|
 | 2025-12-04 | Initial design document created | Wolfgang + Claude |
+| 2025-12-05 | Added Section 12 (Critical Review Findings) and Section 13 (Revised Implementation Phases) based on quant-style critical review. Key changes: added Phase 0 for data infrastructure, simplified backtestable factors to 4, deferred breakeven/hedging to forward-looking only, added tiered transaction costs, required PIT data handling. | Wolfgang + Claude |
 
 ---
 
