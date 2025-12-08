@@ -18,6 +18,10 @@ ta>=0.11.0
 # Logging
 structlog>=23.2.0
 
+# LLM APIs (Phase 2: Evolution)
+openai>=1.0.0
+anthropic>=0.18.0
+
 # Testing (not needed in production, but included for completeness)
 pytest>=7.4.0
 pytest-asyncio>=0.21.0

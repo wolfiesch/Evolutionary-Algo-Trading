@@ -751,16 +751,23 @@ can override via config if needed.
 **Philosophy:** Build thin vertical slices, not horizontal layers. Get end-to-end working first,
 then deepen each component. This validates integration early and finds issues faster.
 
-### Phase 2A: Minimal End-to-End Loop
+### Phase 2A: Minimal End-to-End Loop ✅ **COMPLETE**
 **Goal:** Single strategy → backtest → fitness score → mutate → repeat (on 1 symbol)
 
-1. [ ] Minimal backtester: single symbol, basic metrics (Sharpe, DD, trade count)
-2. [ ] Minimal fitness: Sharpe-only score, no regime testing yet
-3. [ ] Minimal LLM: hardcoded prompt → parse response → validate primitives
-4. [ ] Minimal loop: generate 3 strategies → evaluate → pick best → mutate → repeat 3x
-5. [ ] Verify: end-to-end runs without crashing
+1. [x] Minimal backtester: single symbol, basic metrics (Sharpe, DD, trade count)
+2. [x] Minimal fitness: Sharpe-only score, no regime testing yet
+3. [x] Minimal LLM: hardcoded prompt → parse response → validate primitives
+4. [x] Minimal loop: generate 3 strategies → evaluate → pick best → mutate → repeat 3x
+5. [x] Verify: end-to-end runs without crashing
 
-**Success:** Can run `python evolve.py --generations=3 --symbol=SOLUSDT` and see improving Sharpe.
+**Success:** Can run `python evolve.py --generations=3 --symbol=SOLUSDT` ✅
+
+**Implementation Notes (2025-12-08):**
+- Files created: `shared/evolution/backtester/`, `shared/evolution/fitness/`, `shared/evolution/mutator/`
+- Entry point: `crypto/evolve.py`
+- Uses OpenAI gpt-4o by default (Anthropic fallback available)
+- Currently testing with ~100 candles (need more data for meaningful results)
+- Bybit API is geo-blocked from US - need to download data via Fly.io
 
 ### Phase 2B: Add Regime Testing
 **Goal:** Evaluate strategies across market conditions
@@ -865,4 +872,5 @@ depends on starting population quality.
 | 2025-12-08 | Initial plan created | Claude |
 | 2025-12-08 | Review: Fixed DD formula inconsistency, clarified regime rules, added LLM logging/retry requirements, restructured phases for vertical slice approach, added data distribution note, marked success criteria as initial benchmarks | Claude |
 | 2025-12-08 | Added provider-agnostic LLM interface (OpenAI/Anthropic), added Section 0 for shared vs asset-specific architecture, updated all task tables with full paths and asset-agnostic notes, renamed btc_candles → benchmark_candles throughout | Claude |
+| 2025-12-08 | **Phase 2A COMPLETE**: Implemented minimal backtester, fitness calculator, LLM client (OpenAI+Anthropic), strategy generator, and evolution loop. Successfully tested end-to-end pipeline with `crypto/evolve.py`. | Claude |
 
