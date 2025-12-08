@@ -17,6 +17,18 @@ def setup_logging(logs_dir: Path) -> tuple[structlog.BoundLogger, structlog.Boun
     # Timestamp for log files
     date_str = datetime.now().strftime("%Y-%m-%d")
 
+    # Configure root logger for all modules (WebSocket, etc.)
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+
+    # Root logger console handler
+    root_console = logging.StreamHandler()
+    root_console.setLevel(logging.INFO)
+    root_console.setFormatter(
+        logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    )
+    root_logger.addHandler(root_console)
+
     # Trade logger - all trade activity
     trade_handler = logging.FileHandler(logs_dir / f"trades_{date_str}.log")
     trade_handler.setLevel(logging.INFO)

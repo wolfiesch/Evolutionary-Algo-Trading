@@ -46,8 +46,8 @@ class CandleValidator:
         """
         # 1. Check zero volume -> invalid
         if candle.volume == 0:
-            error_logger.error(
-                f"Zero volume candle detected for {candle.symbol} at {candle.timestamp}"
+            logger.warning(
+                f"Zero volume candle filtered for {candle.symbol} at {candle.timestamp}"
             )
             return ValidationResult(
                 valid=False,
