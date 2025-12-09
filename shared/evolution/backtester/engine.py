@@ -69,7 +69,7 @@ class MinimalBacktester:
             BacktestResults with all metrics calculated
         """
         # Initialize state
-        equity = self.config.initial_equity
+        equity = self.config.initial_equity  # Available cash
         position: Optional[Trade] = None
         trades: list[Trade] = []
         equity_history: list[float] = []
@@ -92,9 +92,11 @@ class MinimalBacktester:
             timestamp = int(current_candle.get('timestamp', i))
 
             # Track equity (mark-to-market if in position)
+            # equity = available cash
+            # current_equity = cash + position value at current prices
             if position:
-                unrealized_pnl = (current_price - position.entry_price) * position.position_size
-                current_equity = equity + unrealized_pnl
+                position_value = current_price * position.position_size
+                current_equity = equity + position_value
             else:
                 current_equity = equity
 
@@ -108,7 +110,10 @@ class MinimalBacktester:
                     position = self._close_position(
                         position, current_price, timestamp, "stop_loss"
                     )
-                    equity += position.pnl
+                    # Credit cash with exit proceeds
+                    exit_proceeds = (current_price * position.position_size) - \
+                                   (current_price * position.position_size * self.config.friction_per_side)
+                    equity += exit_proceeds
                     trades.append(position)
                     position = None
                     continue
@@ -125,7 +130,10 @@ class MinimalBacktester:
                 position = self._close_position(
                     position, current_price, timestamp, "signal"
                 )
-                equity += position.pnl
+                # Credit cash with exit proceeds (position value - exit friction)
+                exit_proceeds = (current_price * position.position_size) - \
+                               (current_price * position.position_size * self.config.friction_per_side)
+                equity += exit_proceeds
                 trades.append(position)
                 position = None
 
@@ -133,6 +141,10 @@ class MinimalBacktester:
                 position = self._open_position(
                     symbol, current_price, timestamp, equity
                 )
+                # Debit cash: position value + entry friction
+                position_cost = (position.position_size * current_price) + \
+                                (position.position_size * current_price * self.config.friction_per_side)
+                equity -= position_cost
 
         # Close any open position at end
         if position:
@@ -141,7 +153,10 @@ class MinimalBacktester:
             position = self._close_position(
                 position, final_price, final_timestamp, "end_of_data"
             )
-            equity += position.pnl
+            # Credit cash with exit proceeds
+            exit_proceeds = (final_price * position.position_size) - \
+                           (final_price * position.position_size * self.config.friction_per_side)
+            equity += exit_proceeds
             trades.append(position)
 
         equity_history.append(equity)

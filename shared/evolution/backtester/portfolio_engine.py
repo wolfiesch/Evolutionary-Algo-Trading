@@ -79,7 +79,7 @@ class PortfolioBacktester:
             return self._empty_results(symbols)
 
         # Initialize state
-        equity = self.config.initial_equity
+        equity = self.config.initial_equity  # Available cash
         positions: dict[str, Trade] = {}  # symbol -> open position
         all_trades: list[Trade] = []
         equity_history: list[float] = []
@@ -96,12 +96,13 @@ class PortfolioBacktester:
             window_benchmark = aligned_benchmark.iloc[:i+1].copy()
 
             # Calculate current portfolio value (mark-to-market)
-            portfolio_value = equity
+            # portfolio_value = cash + sum of all position values at current prices
+            portfolio_value = equity  # Start with available cash
             for sym, pos in positions.items():
                 if sym in aligned_candles:
                     current_price = aligned_candles[sym].iloc[i]['close']
-                    unrealized_pnl = (current_price - pos.entry_price) * pos.position_size
-                    portfolio_value += unrealized_pnl
+                    position_value = current_price * pos.position_size
+                    portfolio_value += position_value
 
             equity_history.append(portfolio_value)
             bars_since_last_entry += 1
@@ -117,18 +118,23 @@ class PortfolioBacktester:
                     # Stop-loss triggered
                     timestamp = int(aligned_candles[sym].iloc[i].get('timestamp', i))
                     closed = self._close_position(pos, current_price, timestamp, "stop_loss")
-                    equity += closed.pnl
+                    # Credit cash with exit proceeds
+                    exit_proceeds = (current_price * closed.position_size) - \
+                                   (current_price * closed.position_size * self.config.friction_per_side)
+                    equity += exit_proceeds
                     all_trades.append(closed)
                     symbols_to_close.append(sym)
 
             for sym in symbols_to_close:
                 del positions[sym]
 
-            # Calculate current exposure
+            # Calculate current exposure vs current portfolio value
+            # Use mark-to-market portfolio value, not initial equity
             total_exposure = sum(
-                pos.position_value / self.config.initial_equity
-                for pos in positions.values()
-            )
+                (aligned_candles[sym].iloc[i]['close'] * pos.position_size) / portfolio_value
+                for sym, pos in positions.items()
+                if sym in aligned_candles
+            ) if portfolio_value > 0 else 0.0
 
             # Process each symbol
             for sym in symbols:
@@ -152,7 +158,10 @@ class PortfolioBacktester:
                 if signal == "EXIT_LONG" and has_position:
                     pos = positions[sym]
                     closed = self._close_position(pos, current_price, timestamp, "signal")
-                    equity += closed.pnl
+                    # Credit cash with exit proceeds
+                    exit_proceeds = (current_price * closed.position_size) - \
+                                   (current_price * closed.position_size * self.config.friction_per_side)
+                    equity += exit_proceeds
                     all_trades.append(closed)
                     del positions[sym]
 
@@ -168,7 +177,10 @@ class PortfolioBacktester:
                         pos = self._open_position(sym, current_price, timestamp, equity)
                         positions[sym] = pos
                         bars_since_last_entry = 0
-                        total_exposure += pos.position_value / self.config.initial_equity
+                        # Debit cash: position value + entry friction
+                        position_cost = (pos.position_size * current_price) + \
+                                        (pos.position_size * current_price * self.config.friction_per_side)
+                        equity -= position_cost
 
         # Close all open positions at end
         for sym, pos in positions.items():
@@ -176,7 +188,10 @@ class PortfolioBacktester:
                 final_price = aligned_candles[sym].iloc[-1]['close']
                 final_timestamp = int(aligned_candles[sym].iloc[-1].get('timestamp', aligned_length))
                 closed = self._close_position(pos, final_price, final_timestamp, "end_of_data")
-                equity += closed.pnl
+                # Credit cash with exit proceeds
+                exit_proceeds = (final_price * closed.position_size) - \
+                               (final_price * closed.position_size * self.config.friction_per_side)
+                equity += exit_proceeds
                 all_trades.append(closed)
 
         equity_history.append(equity)
