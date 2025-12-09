@@ -45,3 +45,6 @@ forex/logs/
 # Claude session data
 .claude/data/sessions/
 crypto/.claude/
+
+# Temporary review files
+/tmp/
