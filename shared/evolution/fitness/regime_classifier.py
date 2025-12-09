@@ -18,13 +18,59 @@ import numpy as np
 
 
 # Regime definitions based on benchmark return and volatility
-REGIME_THRESHOLDS = {
-    # Return thresholds (over classification period)
+# These thresholds are for DAILY windows. For shorter windows, use
+# get_adaptive_thresholds() which scales based on window size.
+REGIME_THRESHOLDS_DAILY = {
+    # Return thresholds (over 1-day / 1440 1-min candles)
     "bull_return_min": 0.02,      # +2% = bullish
     "bear_return_max": -0.02,     # -2% = bearish
     # Volatility percentile threshold
     "volatility_high_percentile": 70,  # Above 70th percentile = volatile
 }
+
+# Thresholds for 1-hour windows (60 1-min candles)
+# Derived from empirical analysis: ±0.3% gives ~25% bull, ~25% bear, ~50% sideways
+REGIME_THRESHOLDS_HOURLY = {
+    "bull_return_min": 0.003,     # +0.3% = bullish (1-hour)
+    "bear_return_max": -0.003,    # -0.3% = bearish (1-hour)
+    "volatility_high_percentile": 70,
+}
+
+
+def get_adaptive_thresholds(window_size: int) -> dict:
+    """
+    Get regime thresholds scaled to window size.
+
+    The core insight: a 2% move in 24 hours is equivalent to
+    roughly 0.08% per hour (sqrt scaling for random walk).
+
+    Args:
+        window_size: Number of 1-minute candles in window
+
+    Returns:
+        Dict with bull_return_min, bear_return_max, volatility_high_percentile
+    """
+    # Reference: 1440 candles = 1 day, threshold = 2%
+    # Scale by sqrt(window/1440) for random-walk-like price behavior
+    daily_candles = 1440
+    daily_threshold = 0.02
+
+    # sqrt scaling factor
+    scale = (window_size / daily_candles) ** 0.5
+    threshold = daily_threshold * scale
+
+    # Floor at 0.2% to avoid noise, cap at 5% for very long windows
+    threshold = max(0.002, min(0.05, threshold))
+
+    return {
+        "bull_return_min": threshold,
+        "bear_return_max": -threshold,
+        "volatility_high_percentile": 70,
+    }
+
+
+# Legacy alias for backwards compatibility
+REGIME_THRESHOLDS = REGIME_THRESHOLDS_HOURLY
 
 # Minimum candles per regime for valid testing
 MIN_CANDLES_PER_REGIME = 100
@@ -55,6 +101,7 @@ class RegimeSplitResult:
 def classify_period(
     benchmark_candles: pd.DataFrame,
     volatility_lookback: int = 20,
+    thresholds: dict | None = None,
 ) -> str:
     """
     Classify a single period into one of 5 regimes.
@@ -62,12 +109,18 @@ def classify_period(
     Args:
         benchmark_candles: OHLCV DataFrame for benchmark (e.g., BTC)
         volatility_lookback: Period for ATR calculation
+        thresholds: Optional custom thresholds dict. If None, uses adaptive
+                   thresholds based on the window size (len of benchmark_candles)
 
     Returns:
         Regime name string
     """
     if len(benchmark_candles) < volatility_lookback + 1:
         return "sideways"  # Default when insufficient data
+
+    # Use adaptive thresholds if not provided
+    if thresholds is None:
+        thresholds = get_adaptive_thresholds(len(benchmark_candles))
 
     # Calculate return over period
     start_price = benchmark_candles['close'].iloc[0]
@@ -99,10 +152,10 @@ def classify_period(
     else:
         volatility_percentile = 50  # Default
 
-    # Classify
-    is_bull = period_return >= REGIME_THRESHOLDS["bull_return_min"]
-    is_bear = period_return <= REGIME_THRESHOLDS["bear_return_max"]
-    is_volatile = volatility_percentile >= REGIME_THRESHOLDS["volatility_high_percentile"]
+    # Classify using provided or adaptive thresholds
+    is_bull = period_return >= thresholds["bull_return_min"]
+    is_bear = period_return <= thresholds["bear_return_max"]
+    is_volatile = volatility_percentile >= thresholds["volatility_high_percentile"]
 
     if is_bull and is_volatile:
         return "bull_volatile"
