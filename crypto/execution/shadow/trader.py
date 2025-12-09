@@ -35,6 +35,13 @@ class TradeLog:
     pnl: Optional[float] = None
     pnl_pct: Optional[float] = None
 
+    # Phase 3D: Slippage calibration fields
+    candle_open: Optional[float] = None   # Open of execution candle
+    candle_high: Optional[float] = None   # High of execution candle
+    candle_low: Optional[float] = None    # Low of execution candle
+    candle_close: Optional[float] = None  # Close of execution candle
+    implied_slippage_pct: Optional[float] = None  # (simulated_fill - price_at_signal) / price_at_signal
+
     def to_json(self) -> str:
         """Convert to JSON string."""
         return json.dumps(asdict(self), indent=None)

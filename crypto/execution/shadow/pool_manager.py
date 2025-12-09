@@ -299,6 +299,14 @@ class ShadowPoolManager:
         atr_regime_val = volatility.atr_regime(candles, 14)
         market_regime = self._classify_regime(btc_candles, atr_regime_val)
 
+        # Extract current candle OHLC for slippage calibration
+        candle_ohlc = (
+            float(candles["open"].iloc[-1]),
+            float(candles["high"].iloc[-1]),
+            float(candles["low"].iloc[-1]),
+            float(candles["close"].iloc[-1]),
+        )
+
         # Process each strategy
         for strategy_id, strategy in self.strategies.items():
             position_key = f"{strategy_id}:{symbol}"
@@ -315,6 +323,7 @@ class ShadowPoolManager:
                         btc_trend=btc_trend_val,
                         atr_regime=atr_regime_val,
                         market_regime=market_regime,
+                        candle_ohlc=candle_ohlc,
                     ):
                         signals_acted.append((strategy_id, signal))
 
@@ -325,6 +334,7 @@ class ShadowPoolManager:
                         price=current_price,
                         btc_candles=btc_candles,
                         reason="SIGNAL",
+                        candle_ohlc=candle_ohlc,
                     ):
                         signals_acted.append((strategy_id, signal))
 
@@ -357,8 +367,20 @@ class ShadowPoolManager:
         btc_trend: float,
         atr_regime: float,
         market_regime: str,
+        candle_ohlc: Optional[tuple[float, float, float, float]] = None,
     ) -> bool:
-        """Execute a simulated long entry."""
+        """
+        Execute a simulated long entry.
+
+        Args:
+            strategy_id: Strategy identifier
+            symbol: Trading symbol
+            price: Signal price (candle close)
+            btc_trend: BTC trend value
+            atr_regime: ATR regime value
+            market_regime: Market regime classification
+            candle_ohlc: Tuple of (open, high, low, close) for slippage tracking
+        """
         position_key = f"{strategy_id}:{symbol}"
 
         # Check position limits
@@ -395,7 +417,10 @@ class ShadowPoolManager:
         )
         self.state.positions[position_key] = position
 
-        # Log trade
+        # Calculate implied slippage for calibration
+        implied_slippage = (fill_price - price) / price if price > 0 else 0
+
+        # Log trade with slippage data
         strategy = self.strategies.get(strategy_id)
         trade_log = TradeLog(
             timestamp=position.entry_time,
@@ -409,6 +434,11 @@ class ShadowPoolManager:
             btc_trend=btc_trend,
             atr_regime=atr_regime,
             market_regime=market_regime,
+            candle_open=candle_ohlc[0] if candle_ohlc else None,
+            candle_high=candle_ohlc[1] if candle_ohlc else None,
+            candle_low=candle_ohlc[2] if candle_ohlc else None,
+            candle_close=candle_ohlc[3] if candle_ohlc else None,
+            implied_slippage_pct=implied_slippage * 100,  # As percentage
         )
         self._log_trade(trade_log)
 
@@ -421,8 +451,19 @@ class ShadowPoolManager:
         price: float,
         btc_candles: pd.DataFrame,
         reason: str = "SIGNAL",
+        candle_ohlc: Optional[tuple[float, float, float, float]] = None,
     ) -> bool:
-        """Execute a simulated long exit."""
+        """
+        Execute a simulated long exit.
+
+        Args:
+            strategy_id: Strategy identifier
+            symbol: Trading symbol
+            price: Signal price (candle close)
+            btc_candles: BTC candle data for market context
+            reason: Exit reason (SIGNAL, STOP_LOSS, EMERGENCY_CLOSE)
+            candle_ohlc: Tuple of (open, high, low, close) for slippage tracking
+        """
         position_key = f"{strategy_id}:{symbol}"
         position = self.state.positions.get(position_key)
 
@@ -458,7 +499,10 @@ class ShadowPoolManager:
         atr_regime_val = volatility.atr_regime(btc_candles, 14)  # Use BTC for regime
         market_regime = self._classify_regime(btc_candles, atr_regime_val)
 
-        # Log trade
+        # Calculate implied slippage for calibration (negative for exits)
+        implied_slippage = (price - fill_price) / price if price > 0 else 0
+
+        # Log trade with slippage data
         strategy = self.strategies.get(strategy_id)
         trade_log = TradeLog(
             timestamp=int(datetime.utcnow().timestamp() * 1000),
@@ -474,6 +518,11 @@ class ShadowPoolManager:
             market_regime=market_regime,
             pnl=pnl_usdt,
             pnl_pct=pnl_pct * 100,
+            candle_open=candle_ohlc[0] if candle_ohlc else None,
+            candle_high=candle_ohlc[1] if candle_ohlc else None,
+            candle_low=candle_ohlc[2] if candle_ohlc else None,
+            candle_close=candle_ohlc[3] if candle_ohlc else None,
+            implied_slippage_pct=implied_slippage * 100,  # As percentage
         )
         self._log_trade(trade_log)
 

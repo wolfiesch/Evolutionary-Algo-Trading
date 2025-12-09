@@ -509,6 +509,104 @@ class EvolutionMonitor:
             "win_rate": wins / len(exits) if exits else 0.0,
         }
 
+    def get_slippage_analysis(self) -> dict:
+        """
+        Analyze realized slippage from shadow trades.
+
+        Calculates slippage statistics per market regime and overall
+        to help calibrate the backtest friction model.
+
+        Returns:
+            Dictionary with slippage statistics
+        """
+        if not self.shadow_trades_path.exists():
+            return {
+                "total_trades": 0,
+                "avg_slippage_pct": 0.0,
+                "by_regime": {},
+                "status": "NO DATA",
+            }
+
+        trades = []
+        try:
+            with open(self.shadow_trades_path, "r") as f:
+                for line in f:
+                    if line.strip():
+                        trades.append(json.loads(line))
+        except Exception as e:
+            return {"error": str(e)}
+
+        if not trades:
+            return {
+                "total_trades": 0,
+                "avg_slippage_pct": 0.0,
+                "by_regime": {},
+                "status": "NO DATA",
+            }
+
+        # Filter trades with slippage data
+        trades_with_slippage = [
+            t for t in trades
+            if t.get("implied_slippage_pct") is not None
+        ]
+
+        if not trades_with_slippage:
+            return {
+                "total_trades": len(trades),
+                "trades_with_slippage": 0,
+                "avg_slippage_pct": 0.0,
+                "by_regime": {},
+                "status": "NO SLIPPAGE DATA (old trades)",
+            }
+
+        # Calculate overall slippage
+        slippages = [abs(t["implied_slippage_pct"]) for t in trades_with_slippage]
+        avg_slippage = sum(slippages) / len(slippages)
+        max_slippage = max(slippages)
+        min_slippage = min(slippages)
+
+        # Calculate by regime
+        by_regime = {}
+        for trade in trades_with_slippage:
+            regime = trade.get("market_regime", "unknown")
+            if regime not in by_regime:
+                by_regime[regime] = {"slippages": [], "count": 0}
+            by_regime[regime]["slippages"].append(abs(trade["implied_slippage_pct"]))
+            by_regime[regime]["count"] += 1
+
+        # Calculate averages per regime
+        regime_stats = {}
+        for regime, data in by_regime.items():
+            regime_stats[regime] = {
+                "count": data["count"],
+                "avg_slippage_pct": sum(data["slippages"]) / len(data["slippages"]),
+                "max_slippage_pct": max(data["slippages"]),
+            }
+
+        # Calculate by signal type (entry vs exit)
+        entries = [t for t in trades_with_slippage if "ENTRY" in t.get("signal", "")]
+        exits = [t for t in trades_with_slippage if "EXIT" in t.get("signal", "")]
+
+        entry_slippage = sum(abs(t["implied_slippage_pct"]) for t in entries) / len(entries) if entries else 0
+        exit_slippage = sum(abs(t["implied_slippage_pct"]) for t in exits) / len(exits) if exits else 0
+
+        # Compare to configured friction
+        configured_friction = settings.friction_per_side * 100  # Convert to pct
+
+        return {
+            "total_trades": len(trades),
+            "trades_with_slippage": len(trades_with_slippage),
+            "avg_slippage_pct": avg_slippage,
+            "max_slippage_pct": max_slippage,
+            "min_slippage_pct": min_slippage,
+            "entry_avg_slippage_pct": entry_slippage,
+            "exit_avg_slippage_pct": exit_slippage,
+            "configured_friction_pct": configured_friction,
+            "friction_accurate": abs(avg_slippage - configured_friction) < 0.1,  # Within 0.1%
+            "by_regime": regime_stats,
+            "status": "OK",
+        }
+
     def generate_daily_report(self, send_webhook: bool = True) -> dict:
         """
         Generate comprehensive daily performance report.
@@ -689,6 +787,28 @@ class EvolutionMonitor:
                 print(f"  Win/Loss: {daily['wins']}/{daily['losses']}")
                 print(f"  Win rate: {daily['win_rate']:.1%}")
 
+        # Slippage Calibration
+        print("\n📊 SLIPPAGE CALIBRATION")
+        print("-" * 40)
+        slippage = self.get_slippage_analysis()
+        if "error" in slippage:
+            print(f"  ERROR: {slippage['error']}")
+        elif slippage.get("trades_with_slippage", 0) == 0:
+            print(f"  Status: {slippage.get('status', 'NO DATA')}")
+            print(f"  Total trades: {slippage.get('total_trades', 0)}")
+        else:
+            accuracy_icon = "✅" if slippage.get("friction_accurate", False) else "⚠️"
+            print(f"  Trades with data: {slippage['trades_with_slippage']}")
+            print(f"  Avg slippage: {slippage['avg_slippage_pct']:.3f}%")
+            print(f"  Configured friction: {slippage['configured_friction_pct']:.3f}%")
+            print(f"  {accuracy_icon} Friction accuracy: {'Within 0.1%' if slippage.get('friction_accurate') else 'CALIBRATION NEEDED'}")
+            print(f"  Entry slippage: {slippage.get('entry_avg_slippage_pct', 0):.3f}%")
+            print(f"  Exit slippage: {slippage.get('exit_avg_slippage_pct', 0):.3f}%")
+            if slippage.get("by_regime"):
+                print("  By regime:")
+                for regime, stats in slippage["by_regime"].items():
+                    print(f"    {regime}: {stats['avg_slippage_pct']:.3f}% ({stats['count']} trades)")
+
         print("\n" + "=" * 70)
 
     def check_alerts(self, send_webhooks: bool = False) -> list[str]:
@@ -865,6 +985,7 @@ def main():
             "shadow_trading": monitor.get_shadow_trading_status(),
             "paper_equity": monitor.get_paper_equity_status(),
             "daily_performance": monitor.get_daily_performance(),
+            "slippage_analysis": monitor.get_slippage_analysis(),
             "alerts": monitor.check_alerts(),
         }
         print(json_lib.dumps(output, indent=2))
