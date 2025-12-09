@@ -1,12 +1,14 @@
 """
-Phase 2B: Evolution Loop with Regime Testing
+Phase 2C: Full Evolution Loop with Portfolio & Walk-Forward
 
 Entry point for LLM-driven strategy evolution.
 
 Usage:
     python evolve.py --generations=3 --symbol=SOLUSDT
     python evolve.py --generations=5 --symbol=ETHUSDT --population=5
-    python evolve.py --generations=5 --symbol=SOLUSDT --regime  # Enable regime testing
+    python evolve.py --generations=5 --symbol=SOLUSDT --regime       # Enable regime testing
+    python evolve.py --generations=3 --portfolio                      # Multi-symbol portfolio
+    python evolve.py --generations=3 --symbol=SOLUSDT --walkforward  # Walk-forward validation
 
 Requirements:
     - OPENAI_API_KEY or ANTHROPIC_API_KEY environment variable
@@ -26,7 +28,14 @@ from crypto.config import settings
 from crypto.data.storage.repository import CandleRepository
 from crypto.engine.strategy_logic.parser import GeneExpressionParser, Strategy, Signal
 
-from shared.evolution.backtester import MinimalBacktester, BacktestConfig
+from shared.evolution.backtester import (
+    MinimalBacktester,
+    BacktestConfig,
+    PortfolioBacktester,
+    WalkForwardValidator,
+    WalkForwardConfig,
+    walk_forward_fitness,
+)
 from shared.evolution.fitness import (
     calculate_fitness,
     calculate_fitness_with_regimes,
@@ -55,7 +64,7 @@ logger = logging.getLogger(__name__)
 
 def create_evaluator(strategy: Strategy, parser: GeneExpressionParser):
     """
-    Create an evaluator function for the backtester.
+    Create an evaluator function for the single-symbol backtester.
 
     This bridges the crypto-specific parser with the asset-agnostic backtester.
 
@@ -72,6 +81,28 @@ def create_evaluator(strategy: Strategy, parser: GeneExpressionParser):
             return signal.value  # "ENTRY_LONG", "EXIT_LONG", or "HOLD"
         except Exception as e:
             logger.debug(f"Evaluator error: {e}")
+            return "HOLD"
+
+    return evaluator
+
+
+def create_portfolio_evaluator(strategy: Strategy, parser: GeneExpressionParser):
+    """
+    Create an evaluator function for the portfolio backtester.
+
+    Args:
+        strategy: Parsed Strategy object
+        parser: GeneExpressionParser instance
+
+    Returns:
+        Function that takes (symbol, candles_df, benchmark_df, has_position) -> signal_str
+    """
+    def evaluator(symbol: str, candles: pd.DataFrame, benchmark_candles: pd.DataFrame, has_position: bool) -> str:
+        try:
+            signal = parser.get_signal(strategy, candles, benchmark_candles, has_position)
+            return signal.value
+        except Exception as e:
+            logger.debug(f"Portfolio evaluator error for {symbol}: {e}")
             return "HOLD"
 
     return evaluator
@@ -145,6 +176,144 @@ def evaluate_strategy(
         ), {}
 
 
+def evaluate_strategy_portfolio(
+    generated: GeneratedStrategy,
+    candles_dict: dict[str, pd.DataFrame],
+    benchmark_candles: pd.DataFrame,
+    backtester: PortfolioBacktester,
+    parser: GeneExpressionParser,
+) -> tuple[FitnessResult, dict]:
+    """
+    Evaluate a strategy on a portfolio of symbols (Phase 2C).
+
+    Args:
+        generated: GeneratedStrategy from LLM
+        candles_dict: Dict of symbol -> OHLCV DataFrame
+        benchmark_candles: OHLCV DataFrame for benchmark (BTC)
+        backtester: PortfolioBacktester instance
+        parser: GeneExpressionParser instance
+
+    Returns:
+        (FitnessResult, portfolio_summary_dict)
+    """
+    try:
+        # Parse strategy
+        strategy = parser.parse(generated.to_dict())
+
+        # Create portfolio evaluator
+        evaluator = create_portfolio_evaluator(strategy, parser)
+
+        # Run portfolio backtest
+        results = backtester.run(
+            evaluator=evaluator,
+            candles=candles_dict,
+            benchmark_candles=benchmark_candles,
+        )
+
+        # Calculate fitness from portfolio results
+        fitness = FitnessResult(
+            sharpe_ratio=results.sharpe_ratio,
+            max_drawdown=results.max_drawdown,
+            trade_count=results.trade_count,
+            win_rate=results.win_rate,
+            profit_factor=results.profit_factor,
+            total_return=results.total_return,
+        )
+
+        # Apply disqualification rules
+        if results.trade_count < 3:
+            fitness.disqualified = True
+            fitness.disqualification_reason = f"Insufficient trades: {results.trade_count} < 3"
+            fitness.final_score = 0.0
+        elif results.max_drawdown > 0.25:
+            fitness.disqualified = True
+            fitness.disqualification_reason = f"Max drawdown too high: {results.max_drawdown:.1%}"
+            fitness.final_score = 0.0
+        elif results.win_rate < 0.15:
+            fitness.disqualified = True
+            fitness.disqualification_reason = f"Win rate too low: {results.win_rate:.1%}"
+            fitness.final_score = 0.0
+        else:
+            # Calculate drawdown multiplier
+            from shared.evolution.fitness import drawdown_penalty
+            fitness.drawdown_multiplier = drawdown_penalty(results.max_drawdown)
+            base_sharpe = max(0.0, results.sharpe_ratio)
+            fitness.final_score = base_sharpe * fitness.drawdown_multiplier
+
+        return fitness, results.summary()
+
+    except Exception as e:
+        logger.error(f"Failed to evaluate portfolio {generated.name}: {e}")
+        return FitnessResult(
+            disqualified=True,
+            disqualification_reason=f"Portfolio evaluation error: {str(e)}"
+        ), {}
+
+
+def evaluate_strategy_walkforward(
+    generated: GeneratedStrategy,
+    candles: pd.DataFrame,
+    benchmark_candles: pd.DataFrame,
+    validator: WalkForwardValidator,
+    parser: GeneExpressionParser,
+    symbol: str,
+) -> tuple[FitnessResult, dict]:
+    """
+    Evaluate a strategy using walk-forward validation (Phase 2C).
+
+    Args:
+        generated: GeneratedStrategy from LLM
+        candles: OHLCV DataFrame for trading symbol
+        benchmark_candles: OHLCV DataFrame for benchmark (BTC)
+        validator: WalkForwardValidator instance
+        parser: GeneExpressionParser instance
+        symbol: Symbol name
+
+    Returns:
+        (FitnessResult, walkforward_summary_dict)
+    """
+    try:
+        # Parse strategy
+        strategy = parser.parse(generated.to_dict())
+
+        # Create evaluator
+        evaluator = create_evaluator(strategy, parser)
+
+        # Run walk-forward validation
+        wf_results = validator.validate(
+            evaluator=evaluator,
+            candles=candles,
+            benchmark_candles=benchmark_candles,
+            symbol=symbol,
+        )
+
+        # Calculate fitness from walk-forward results
+        score, is_valid, reason = walk_forward_fitness(wf_results)
+
+        fitness = FitnessResult(
+            sharpe_ratio=wf_results.avg_sharpe,
+            trade_count=wf_results.aggregated.trade_count if wf_results.aggregated else 0,
+            win_rate=wf_results.avg_win_rate,
+            total_return=wf_results.avg_return,
+        )
+
+        if not is_valid:
+            fitness.disqualified = True
+            fitness.disqualification_reason = reason
+            fitness.final_score = 0.0
+        else:
+            fitness.final_score = score
+
+        return fitness, wf_results.summary()
+
+    except Exception as e:
+        logger.error(f"Failed to evaluate walk-forward {generated.name}: {e}")
+        return FitnessResult(
+            disqualified=True,
+            disqualification_reason=f"Walk-forward evaluation error: {str(e)}"
+        ), {}
+
+
 def run_evolution(
     symbol: str,
     generations: int = 3,
@@ -152,6 +321,9 @@ def run_evolution(
     db_path: Path = None,
     log_dir: Path = None,
     use_regime_testing: bool = False,
+    use_portfolio: bool = False,
+    use_walkforward: bool = False,
+    portfolio_symbols: list[str] = None,
 ):
     """
     Run the evolution loop.
@@ -163,6 +335,9 @@ def run_evolution(
         db_path: Path to SQLite database (default: settings.sqlite_path)
         log_dir: Directory for logs (default: settings.logs_dir)
         use_regime_testing: If True, use Phase 2B regime-aware fitness
+        use_portfolio: If True, use Phase 2C multi-symbol portfolio testing
+        use_walkforward: If True, use Phase 2C walk-forward validation
+        portfolio_symbols: List of symbols for portfolio mode (default: SOLUSDT, ETHUSDT)
     """
     if db_path is None:
         # Try cloud database first, fall back to local
@@ -172,15 +347,35 @@ def run_evolution(
     if log_dir is None:
         log_dir = settings.logs_dir
 
-    phase = "2B" if use_regime_testing else "2A"
-    mode = "REGIME TESTING" if use_regime_testing else "MINIMAL"
+    if portfolio_symbols is None:
+        portfolio_symbols = ["SOLUSDT", "ETHUSDT"]
+
+    # Determine mode
+    if use_portfolio:
+        phase = "2C"
+        mode = "PORTFOLIO"
+    elif use_walkforward:
+        phase = "2C"
+        mode = "WALK-FORWARD"
+    elif use_regime_testing:
+        phase = "2B"
+        mode = "REGIME TESTING"
+    else:
+        phase = "2A"
+        mode = "MINIMAL"
+
     logger.info("=" * 60)
     logger.info(f"PHASE {phase}: {mode} EVOLUTION LOOP")
     logger.info("=" * 60)
-    logger.info(f"Symbol: {symbol}")
+    if use_portfolio:
+        logger.info(f"Symbols: {', '.join(portfolio_symbols)}")
+    else:
+        logger.info(f"Symbol: {symbol}")
     logger.info(f"Generations: {generations}")
     logger.info(f"Population size: {population_size}")
     logger.info(f"Regime testing: {'ENABLED' if use_regime_testing else 'DISABLED'}")
+    logger.info(f"Portfolio mode: {'ENABLED' if use_portfolio else 'DISABLED'}")
+    logger.info(f"Walk-forward: {'ENABLED' if use_walkforward else 'DISABLED'}")
     logger.info(f"Database: {db_path}")
     logger.info("=" * 60)
 
@@ -189,21 +384,6 @@ def run_evolution(
 
     # Repository
     repo = CandleRepository(db_path)
-
-    # Load candle data
-    logger.info(f"Loading candles for {symbol}...")
-    symbol_candles = repo.get_latest(symbol, limit=5000)
-    if len(symbol_candles) < 80:
-        # [*TO-DO*] - Increase to 200+ when more data is available
-        logger.error(f"Insufficient data for {symbol}: {len(symbol_candles)} candles (need 80+)")
-        return
-
-    logger.info(f"Loading benchmark candles (BTCUSDT)...")
-    btc_candles = repo.get_latest("BTCUSDT", limit=5000)
-    if len(btc_candles) < 80:
-        # [*TO-DO*] - Increase to 200+ when more data is available
-        logger.error(f"Insufficient BTC data: {len(btc_candles)} candles (need 80+)")
-        return
 
     # Convert to DataFrames
     def candles_to_df(candles):
@@ -216,19 +396,67 @@ def run_evolution(
             'timestamp': c.timestamp,
         } for c in candles])
 
-    symbol_df = candles_to_df(symbol_candles)
+    # Load benchmark candles (BTC)
+    logger.info("Loading benchmark candles (BTCUSDT)...")
+    btc_candles = repo.get_latest("BTCUSDT", limit=5000)
+    if len(btc_candles) < 80:
+        # [*TO-DO*] - Increase to 200+ when more data is available
+        logger.error(f"Insufficient BTC data: {len(btc_candles)} candles (need 80+)")
+        return
     btc_df = candles_to_df(btc_candles)
 
-    logger.info(f"Loaded {len(symbol_df)} {symbol} candles, {len(btc_df)} BTC candles")
+    # Load symbol candle data
+    if use_portfolio:
+        # Portfolio mode: load multiple symbols
+        candles_dict: dict[str, pd.DataFrame] = {}
+        for sym in portfolio_symbols:
+            logger.info(f"Loading candles for {sym}...")
+            sym_candles = repo.get_latest(sym, limit=5000)
+            if len(sym_candles) < 80:
+                logger.warning(f"Insufficient data for {sym}: {len(sym_candles)} candles (need 80+), skipping")
+                continue
+            candles_dict[sym] = candles_to_df(sym_candles)
+            logger.info(f"  Loaded {len(candles_dict[sym])} candles")
 
-    # Initialize backtester (crypto-specific config)
+        if not candles_dict:
+            logger.error("No symbols have sufficient data for portfolio backtesting")
+            return
+
+        logger.info(f"Portfolio: {len(candles_dict)} symbols loaded")
+        symbol_df = None  # Not used in portfolio mode
+    else:
+        # Single symbol mode
+        logger.info(f"Loading candles for {symbol}...")
+        symbol_candles = repo.get_latest(symbol, limit=5000)
+        if len(symbol_candles) < 80:
+            # [*TO-DO*] - Increase to 200+ when more data is available
+            logger.error(f"Insufficient data for {symbol}: {len(symbol_candles)} candles (need 80+)")
+            return
+        symbol_df = candles_to_df(symbol_candles)
+        candles_dict = None  # Not used in single-symbol mode
+        logger.info(f"Loaded {len(symbol_df)} {symbol} candles, {len(btc_df)} BTC candles")
+
+    # Initialize backtester(s) (crypto-specific config)
     backtest_config = BacktestConfig(
         initial_equity=10_000,
         friction_per_side=0.0025,  # 0.25% Bybit taker fee + slippage
         max_position_pct=0.10,
         stop_loss_pct=0.03,
+        max_open_positions=5 if use_portfolio else 1,
+        max_total_exposure=0.50,
     )
+
     backtester = MinimalBacktester(backtest_config)
+    portfolio_backtester = PortfolioBacktester(backtest_config) if use_portfolio else None
+    wf_validator = None
+    if use_walkforward:
+        wf_config = WalkForwardConfig(
+            train_bars=2000,  # ~1.4 days training
+            test_bars=500,    # ~8 hours test
+            step_bars=500,    # Step by ~8 hours
+            min_windows=3,    # Need at least 3 windows
+        )
+        wf_validator = WalkForwardValidator(backtest_config, wf_config)
 
     # Initialize parser
     parser = GeneExpressionParser()
@@ -261,7 +489,7 @@ def run_evolution(
         return
 
     # Log regime distribution if enabled
-    if use_regime_testing:
+    if use_regime_testing and symbol_df is not None:
         split_result = split_by_regime(symbol_df, btc_df)
         logger.info("\nRegime distribution:")
         for regime in REGIME_NAMES:
@@ -269,16 +497,29 @@ def run_evolution(
             pct = split_result.regime_stats.get(regime, {}).get("pct_of_total", 0)
             logger.info(f"  {regime}: {count} candles ({pct:.1f}%)")
 
+    # Helper function to evaluate a strategy based on mode
+    def eval_strategy(strat: GeneratedStrategy) -> tuple[FitnessResult, dict]:
+        if use_portfolio:
+            return evaluate_strategy_portfolio(
+                strat, candles_dict, btc_df, portfolio_backtester, parser
+            )
+        elif use_walkforward:
+            return evaluate_strategy_walkforward(
+                strat, symbol_df, btc_df, wf_validator, parser, symbol
+            )
+        else:
+            return evaluate_strategy(
+                strat, symbol_df, btc_df, backtester, parser, symbol,
+                use_regime_testing=use_regime_testing
+            )
+
     # Evaluate initial population
     for strat in strategies:
         logger.info(f"\nEvaluating: {strat.name}")
         logger.info(f"  Entry: {strat.entry_long}")
         logger.info(f"  Exit: {strat.exit_long}")
 
-        fitness, summary = evaluate_strategy(
-            strat, symbol_df, btc_df, backtester, parser, symbol,
-            use_regime_testing=use_regime_testing
-        )
+        fitness, summary = eval_strategy(strat)
 
         population.append((strat, fitness))
 
@@ -329,10 +570,7 @@ def run_evolution(
                 logger.info(f"  Entry: {mutated.entry_long}")
                 logger.info(f"  Exit: {mutated.exit_long}")
 
-                fitness, summary = evaluate_strategy(
-                    mutated, symbol_df, btc_df, backtester, parser, symbol,
-                    use_regime_testing=use_regime_testing
-                )
+                fitness, summary = eval_strategy(mutated)
 
                 new_population.append((mutated, fitness))
 
@@ -348,10 +586,7 @@ def run_evolution(
                 logger.warning(f"  Mutation failed, generating new strategy...")
                 new_strat = generator.generate()
                 if new_strat:
-                    fitness, _ = evaluate_strategy(
-                        new_strat, symbol_df, btc_df, backtester, parser, symbol,
-                        use_regime_testing=use_regime_testing
-                    )
+                    fitness, _ = eval_strategy(new_strat)
                     new_population.append((new_strat, fitness))
 
         # Sort by fitness
@@ -386,42 +621,59 @@ def run_evolution(
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Phase 2B: Evolution Loop with Regime Testing"
+    arg_parser = argparse.ArgumentParser(
+        description="Phase 2C: Evolution Loop with Portfolio & Walk-Forward"
     )
-    parser.add_argument(
+    arg_parser.add_argument(
         "--symbol",
         type=str,
         default="SOLUSDT",
-        help="Trading symbol (default: SOLUSDT)"
+        help="Trading symbol for single-symbol mode (default: SOLUSDT)"
     )
-    parser.add_argument(
+    arg_parser.add_argument(
         "--generations",
         type=int,
         default=3,
         help="Number of evolution generations (default: 3)"
     )
-    parser.add_argument(
+    arg_parser.add_argument(
         "--population",
         type=int,
         default=3,
         help="Population size (default: 3)"
     )
-    parser.add_argument(
+    arg_parser.add_argument(
         "--db",
         type=str,
         default=None,
         help="Path to SQLite database (default: auto-detect)"
     )
-    parser.add_argument(
+    arg_parser.add_argument(
         "--regime",
         action="store_true",
         help="Enable Phase 2B regime testing (default: off)"
     )
+    arg_parser.add_argument(
+        "--portfolio",
+        action="store_true",
+        help="Enable Phase 2C multi-symbol portfolio mode (default: off)"
+    )
+    arg_parser.add_argument(
+        "--walkforward",
+        action="store_true",
+        help="Enable Phase 2C walk-forward validation (default: off)"
+    )
+    arg_parser.add_argument(
+        "--symbols",
+        type=str,
+        default="SOLUSDT,ETHUSDT",
+        help="Comma-separated symbols for portfolio mode (default: SOLUSDT,ETHUSDT)"
+    )
 
-    args = parser.parse_args()
+    args = arg_parser.parse_args()
 
     db_path = Path(args.db) if args.db else None
+    portfolio_symbols = [s.strip() for s in args.symbols.split(",")]
 
     run_evolution(
         symbol=args.symbol,
@@ -429,6 +681,9 @@ def main():
         population_size=args.population,
         db_path=db_path,
         use_regime_testing=args.regime,
+        use_portfolio=args.portfolio,
+        use_walkforward=args.walkforward,
+        portfolio_symbols=portfolio_symbols,
     )
 
 
