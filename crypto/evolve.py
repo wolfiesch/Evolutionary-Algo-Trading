@@ -1,11 +1,12 @@
 """
-Phase 2A: Minimal Evolution Loop
+Phase 2B: Evolution Loop with Regime Testing
 
 Entry point for LLM-driven strategy evolution.
 
 Usage:
     python evolve.py --generations=3 --symbol=SOLUSDT
     python evolve.py --generations=5 --symbol=ETHUSDT --population=5
+    python evolve.py --generations=5 --symbol=SOLUSDT --regime  # Enable regime testing
 
 Requirements:
     - OPENAI_API_KEY or ANTHROPIC_API_KEY environment variable
@@ -26,7 +27,14 @@ from crypto.data.storage.repository import CandleRepository
 from crypto.engine.strategy_logic.parser import GeneExpressionParser, Strategy, Signal
 
 from shared.evolution.backtester import MinimalBacktester, BacktestConfig
-from shared.evolution.fitness import calculate_fitness, FitnessResult
+from shared.evolution.fitness import (
+    calculate_fitness,
+    calculate_fitness_with_regimes,
+    aggregate_regime_results,
+    FitnessResult,
+    split_by_regime,
+    REGIME_NAMES,
+)
 from shared.evolution.mutator import (
     create_default_client,
     StrategyGenerator,
@@ -76,6 +84,7 @@ def evaluate_strategy(
     backtester: MinimalBacktester,
     parser: GeneExpressionParser,
     symbol: str,
+    use_regime_testing: bool = False,
 ) -> tuple[FitnessResult, dict]:
     """
     Evaluate a generated strategy via backtest.
@@ -87,6 +96,7 @@ def evaluate_strategy(
         backtester: MinimalBacktester instance
         parser: GeneExpressionParser instance
         symbol: Symbol name
+        use_regime_testing: If True, use Phase 2B regime-aware fitness
 
     Returns:
         (FitnessResult, backtest_summary_dict)
@@ -98,18 +108,33 @@ def evaluate_strategy(
         # Create evaluator
         evaluator = create_evaluator(strategy, parser)
 
-        # Run backtest
-        results = backtester.run(
-            evaluator=evaluator,
-            candles=candles,
-            benchmark_candles=benchmark_candles,
-            symbol=symbol,
-        )
+        if use_regime_testing:
+            # Phase 2B: Run backtest by regime
+            regime_results = backtester.run_by_regime(
+                evaluator=evaluator,
+                candles=candles,
+                benchmark_candles=benchmark_candles,
+                symbol=symbol,
+            )
 
-        # Calculate fitness
-        fitness = calculate_fitness(results)
+            # Aggregate results and calculate regime-aware fitness
+            overall_results = aggregate_regime_results(regime_results)
+            fitness = calculate_fitness_with_regimes(overall_results, regime_results)
 
-        return fitness, results.summary()
+            return fitness, overall_results.summary()
+        else:
+            # Phase 2A: Simple backtest
+            results = backtester.run(
+                evaluator=evaluator,
+                candles=candles,
+                benchmark_candles=benchmark_candles,
+                symbol=symbol,
+            )
+
+            # Calculate fitness
+            fitness = calculate_fitness(results)
+
+            return fitness, results.summary()
 
     except Exception as e:
         logger.error(f"Failed to evaluate {generated.name}: {e}")
@@ -126,6 +151,7 @@ def run_evolution(
     population_size: int = 3,
     db_path: Path = None,
     log_dir: Path = None,
+    use_regime_testing: bool = False,
 ):
     """
     Run the evolution loop.
@@ -136,6 +162,7 @@ def run_evolution(
         population_size: Number of strategies per generation
         db_path: Path to SQLite database (default: settings.sqlite_path)
         log_dir: Directory for logs (default: settings.logs_dir)
+        use_regime_testing: If True, use Phase 2B regime-aware fitness
     """
     if db_path is None:
         # Try cloud database first, fall back to local
@@ -145,12 +172,15 @@ def run_evolution(
     if log_dir is None:
         log_dir = settings.logs_dir
 
+    phase = "2B" if use_regime_testing else "2A"
+    mode = "REGIME TESTING" if use_regime_testing else "MINIMAL"
     logger.info("=" * 60)
-    logger.info("PHASE 2A: MINIMAL EVOLUTION LOOP")
+    logger.info(f"PHASE {phase}: {mode} EVOLUTION LOOP")
     logger.info("=" * 60)
     logger.info(f"Symbol: {symbol}")
     logger.info(f"Generations: {generations}")
     logger.info(f"Population size: {population_size}")
+    logger.info(f"Regime testing: {'ENABLED' if use_regime_testing else 'DISABLED'}")
     logger.info(f"Database: {db_path}")
     logger.info("=" * 60)
 
@@ -230,6 +260,15 @@ def run_evolution(
         logger.error("Failed to generate any initial strategies")
         return
 
+    # Log regime distribution if enabled
+    if use_regime_testing:
+        split_result = split_by_regime(symbol_df, btc_df)
+        logger.info("\nRegime distribution:")
+        for regime in REGIME_NAMES:
+            count = split_result.regime_stats.get(regime, {}).get("candle_count", 0)
+            pct = split_result.regime_stats.get(regime, {}).get("pct_of_total", 0)
+            logger.info(f"  {regime}: {count} candles ({pct:.1f}%)")
+
     # Evaluate initial population
     for strat in strategies:
         logger.info(f"\nEvaluating: {strat.name}")
@@ -237,7 +276,8 @@ def run_evolution(
         logger.info(f"  Exit: {strat.exit_long}")
 
         fitness, summary = evaluate_strategy(
-            strat, symbol_df, btc_df, backtester, parser, symbol
+            strat, symbol_df, btc_df, backtester, parser, symbol,
+            use_regime_testing=use_regime_testing
         )
 
         population.append((strat, fitness))
@@ -249,6 +289,9 @@ def run_evolution(
                        f"Sharpe={fitness.sharpe_ratio:.2f}, "
                        f"DD={fitness.max_drawdown:.1%}, "
                        f"Trades={fitness.trade_count}")
+            if use_regime_testing and fitness.regime_scores:
+                logger.info(f"  Regime pass count: {fitness.regime_pass_count}/5")
+                logger.info(fitness.regime_summary())
 
     # Sort by fitness
     population.sort(key=lambda x: x[1].final_score, reverse=True)
@@ -287,7 +330,8 @@ def run_evolution(
                 logger.info(f"  Exit: {mutated.exit_long}")
 
                 fitness, summary = evaluate_strategy(
-                    mutated, symbol_df, btc_df, backtester, parser, symbol
+                    mutated, symbol_df, btc_df, backtester, parser, symbol,
+                    use_regime_testing=use_regime_testing
                 )
 
                 new_population.append((mutated, fitness))
@@ -298,12 +342,15 @@ def run_evolution(
                     logger.info(f"  Result: Score={fitness.final_score:.3f}, "
                                f"Sharpe={fitness.sharpe_ratio:.2f}, "
                                f"DD={fitness.max_drawdown:.1%}")
+                    if use_regime_testing and fitness.regime_scores:
+                        logger.info(f"  Regime pass count: {fitness.regime_pass_count}/5")
             else:
                 logger.warning(f"  Mutation failed, generating new strategy...")
                 new_strat = generator.generate()
                 if new_strat:
                     fitness, _ = evaluate_strategy(
-                        new_strat, symbol_df, btc_df, backtester, parser, symbol
+                        new_strat, symbol_df, btc_df, backtester, parser, symbol,
+                        use_regime_testing=use_regime_testing
                     )
                     new_population.append((new_strat, fitness))
 
@@ -340,7 +387,7 @@ def run_evolution(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Phase 2A: Minimal Evolution Loop"
+        description="Phase 2B: Evolution Loop with Regime Testing"
     )
     parser.add_argument(
         "--symbol",
@@ -366,6 +413,11 @@ def main():
         default=None,
         help="Path to SQLite database (default: auto-detect)"
     )
+    parser.add_argument(
+        "--regime",
+        action="store_true",
+        help="Enable Phase 2B regime testing (default: off)"
+    )
 
     args = parser.parse_args()
 
@@ -376,6 +428,7 @@ def main():
         generations=args.generations,
         population_size=args.population,
         db_path=db_path,
+        use_regime_testing=args.regime,
     )
 
 

@@ -2,17 +2,26 @@
 Fitness calculator - asset-agnostic.
 
 Phase 2A: Sharpe-only scoring with basic disqualification.
-Phase 2B+: Will add regime testing and full formula.
+Phase 2B: Full regime testing with multipliers.
 """
+from typing import Optional
 from shared.evolution.backtester.models import BacktestResults
 from shared.evolution.fitness.models import FitnessResult
+from shared.evolution.fitness.regime_classifier import (
+    REGIME_NAMES,
+    calculate_regime_pass_count,
+    calculate_regime_multiplier,
+    has_negative_regime,
+)
 
 
 # Disqualification thresholds
 # [*TO-DO*] - Increase MIN_TRADES to 30 when more data available
 MIN_TRADES = 3               # Phase 2A: Very low for testing with limited data
+MIN_TRADES_PER_REGIME = 2    # Phase 2B: Minimum trades per regime
 MAX_DRAWDOWN_HARD = 0.25     # 25% max drawdown
 MIN_WIN_RATE = 0.15          # 15% minimum win rate (relaxed for testing)
+MIN_REGIME_PASSES = 4        # Need Sharpe >= 0.5 in 4/5 regimes
 
 
 def calculate_fitness(backtest_results: BacktestResults) -> FitnessResult:
@@ -117,4 +126,187 @@ def rank_strategies(fitness_results: list[tuple[str, FitnessResult]]) -> list[tu
         fitness_results,
         key=lambda x: x[1].final_score,
         reverse=True
+    )
+
+
+def calculate_fitness_with_regimes(
+    overall_results: BacktestResults,
+    regime_results: dict[str, BacktestResults],
+) -> FitnessResult:
+    """
+    Calculate fitness score with regime testing (Phase 2B).
+
+    Formula:
+        final_score = sharpe_ratio * regime_multiplier * drawdown_multiplier
+
+    Where:
+        - regime_multiplier = 0 if <4 regimes pass (Sharpe >= 0.5), else (passed/5)
+        - drawdown_multiplier = drawdown_penalty(max_dd)
+
+    Regime Rules:
+        1. HARD FAIL: Any regime with negative Sharpe -> disqualified
+        2. PASS REQUIREMENT: Sharpe >= 0.5 in at least 4/5 regimes
+
+    Disqualification (score = 0):
+        - Less than MIN_TRADES total trades
+        - Any regime with negative Sharpe
+        - Max drawdown > 25%
+        - Win rate < 15%
+        - Less than 4 regimes pass (Sharpe >= 0.5)
+
+    Args:
+        overall_results: Aggregated backtest results across all regimes
+        regime_results: Dict mapping regime name to BacktestResults
+
+    Returns:
+        FitnessResult with regime-aware score
+    """
+    result = FitnessResult(
+        sharpe_ratio=overall_results.sharpe_ratio,
+        max_drawdown=overall_results.max_drawdown,
+        trade_count=overall_results.trade_count,
+        win_rate=overall_results.win_rate,
+        profit_factor=overall_results.profit_factor,
+        total_return=overall_results.total_return,
+        regime_testing_enabled=True,
+    )
+
+    # Extract regime Sharpe ratios and trade counts
+    regime_sharpes: dict[str, float] = {}
+    regime_trade_counts: dict[str, int] = {}
+
+    for regime in REGIME_NAMES:
+        if regime in regime_results:
+            regime_sharpes[regime] = regime_results[regime].sharpe_ratio
+            regime_trade_counts[regime] = regime_results[regime].trade_count
+        else:
+            # Missing regime - treat as 0 Sharpe, 0 trades
+            regime_sharpes[regime] = 0.0
+            regime_trade_counts[regime] = 0
+
+    result.regime_scores = regime_sharpes
+    result.regime_trade_counts = regime_trade_counts
+
+    # Check basic disqualification (same as Phase 2A)
+    if overall_results.trade_count < MIN_TRADES:
+        result.disqualified = True
+        result.disqualification_reason = f"Insufficient trades: {overall_results.trade_count} < {MIN_TRADES}"
+        result.final_score = 0.0
+        return result
+
+    if overall_results.max_drawdown > MAX_DRAWDOWN_HARD:
+        result.disqualified = True
+        result.disqualification_reason = f"Max drawdown too high: {overall_results.max_drawdown:.1%} > {MAX_DRAWDOWN_HARD:.0%}"
+        result.final_score = 0.0
+        return result
+
+    if overall_results.win_rate < MIN_WIN_RATE:
+        result.disqualified = True
+        result.disqualification_reason = f"Win rate too low: {overall_results.win_rate:.1%} < {MIN_WIN_RATE:.0%}"
+        result.final_score = 0.0
+        return result
+
+    # Phase 2B: Check regime-specific disqualification
+    # HARD FAIL: Any regime with negative Sharpe
+    has_neg, neg_regime = has_negative_regime(regime_sharpes)
+    if has_neg:
+        result.disqualified = True
+        result.negative_regime = neg_regime
+        result.disqualification_reason = f"Negative Sharpe in {neg_regime}: {regime_sharpes[neg_regime]:.2f}"
+        result.final_score = 0.0
+        return result
+
+    # Calculate regime pass count and multiplier
+    result.regime_pass_count = calculate_regime_pass_count(regime_sharpes)
+    result.regime_multiplier = calculate_regime_multiplier(regime_sharpes, MIN_REGIME_PASSES)
+
+    # Disqualify if not enough regimes pass
+    if result.regime_pass_count < MIN_REGIME_PASSES:
+        result.disqualified = True
+        result.disqualification_reason = f"Only {result.regime_pass_count}/5 regimes pass (need {MIN_REGIME_PASSES})"
+        result.final_score = 0.0
+        return result
+
+    # Calculate drawdown multiplier
+    result.drawdown_multiplier = drawdown_penalty(overall_results.max_drawdown)
+
+    # Final score: Sharpe * regime_multiplier * drawdown_multiplier
+    base_sharpe = max(0.0, overall_results.sharpe_ratio)
+    result.final_score = base_sharpe * result.regime_multiplier * result.drawdown_multiplier
+
+    return result
+
+
+def aggregate_regime_results(regime_results: dict[str, BacktestResults]) -> BacktestResults:
+    """
+    Aggregate backtest results from multiple regimes into overall results.
+
+    Args:
+        regime_results: Dict mapping regime name to BacktestResults
+
+    Returns:
+        Aggregated BacktestResults
+    """
+    from shared.evolution.backtester.models import BacktestResults, Trade
+    import pandas as pd
+
+    all_trades: list[Trade] = []
+    all_equity_points: list[float] = []
+    total_candles = 0
+
+    for regime, results in regime_results.items():
+        all_trades.extend(results.trades)
+        if results.equity_curve is not None and len(results.equity_curve) > 0:
+            all_equity_points.extend(results.equity_curve.tolist())
+        total_candles += results.candle_count
+
+    # Calculate aggregated metrics
+    trade_count = len(all_trades)
+    wins = [t for t in all_trades if t.is_winner]
+    losses = [t for t in all_trades if not t.is_winner]
+
+    win_rate = len(wins) / trade_count if trade_count > 0 else 0.0
+    gross_profit = sum(t.pnl for t in wins)
+    gross_loss = abs(sum(t.pnl for t in losses))
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+
+    # Create equity curve from all points
+    if all_equity_points:
+        equity_curve = pd.Series(all_equity_points)
+        final_equity = equity_curve.iloc[-1]
+        total_return = (final_equity - 10000) / 10000  # Assuming 10k initial
+
+        # Calculate max drawdown
+        peak = equity_curve.expanding().max()
+        drawdown = (equity_curve - peak) / peak
+        max_drawdown = abs(drawdown.min())
+
+        # Calculate Sharpe (simplified - use per-period returns)
+        returns = equity_curve.pct_change().dropna()
+        if len(returns) > 1 and returns.std() > 0:
+            sharpe = (returns.mean() / returns.std()) * (525600 ** 0.5)  # Annualized
+            sharpe = max(-10.0, min(10.0, sharpe))
+        else:
+            sharpe = 0.0
+    else:
+        equity_curve = pd.Series([10000.0])
+        final_equity = 10000.0
+        total_return = 0.0
+        max_drawdown = 0.0
+        sharpe = 0.0
+
+    return BacktestResults(
+        symbol="AGGREGATED",
+        candle_count=total_candles,
+        trades=all_trades,
+        trade_count=trade_count,
+        win_count=len(wins),
+        loss_count=len(losses),
+        win_rate=win_rate,
+        profit_factor=profit_factor,
+        equity_curve=equity_curve,
+        final_equity=final_equity,
+        total_return=total_return,
+        max_drawdown=max_drawdown,
+        sharpe_ratio=sharpe,
     )

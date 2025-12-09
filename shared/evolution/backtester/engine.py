@@ -314,3 +314,64 @@ class MinimalBacktester:
             final_equity=self.config.initial_equity,
             equity_curve=pd.Series([self.config.initial_equity]),
         )
+
+    def run_by_regime(
+        self,
+        evaluator: StrategyEvaluator,
+        candles: pd.DataFrame,
+        benchmark_candles: pd.DataFrame,
+        symbol: str,
+        window_size: int = 60,
+        step_size: int = 30,
+    ) -> dict[str, BacktestResults]:
+        """
+        Run backtests separately for each market regime.
+
+        This splits the data by regime, then runs the backtester on each
+        regime's data independently.
+
+        Args:
+            evaluator: Strategy evaluation function
+            candles: OHLCV DataFrame for the trading symbol
+            benchmark_candles: OHLCV DataFrame for benchmark
+            symbol: Symbol name
+            window_size: Regime classification window size
+            step_size: Regime classification step size
+
+        Returns:
+            Dict mapping regime name to BacktestResults
+        """
+        from shared.evolution.fitness.regime_classifier import (
+            split_by_regime,
+            REGIME_NAMES,
+        )
+
+        # Split data by regime
+        split_result = split_by_regime(
+            candles=candles,
+            benchmark_candles=benchmark_candles,
+            window_size=window_size,
+            step_size=step_size,
+        )
+
+        # Run backtest for each regime
+        regime_results: dict[str, BacktestResults] = {}
+
+        for regime in REGIME_NAMES:
+            regime_candles = split_result.candles_by_regime.get(regime, pd.DataFrame())
+            regime_benchmark = split_result.benchmark_by_regime.get(regime, pd.DataFrame())
+
+            if len(regime_candles) < 60:  # Need warmup period
+                # Return empty results for this regime
+                regime_results[regime] = self._empty_results(f"{symbol}_{regime}")
+                continue
+
+            # Run backtest on this regime's data
+            regime_results[regime] = self.run(
+                evaluator=evaluator,
+                candles=regime_candles,
+                benchmark_candles=regime_benchmark,
+                symbol=f"{symbol}_{regime}",
+            )
+
+        return regime_results

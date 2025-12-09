@@ -769,16 +769,25 @@ then deepen each component. This validates integration early and finds issues fa
 - Currently testing with ~100 candles (need more data for meaningful results)
 - Bybit API is geo-blocked from US - need to download data via Fly.io
 
-### Phase 2B: Add Regime Testing
+### Phase 2B: Add Regime Testing ✅ **COMPLETE**
 **Goal:** Evaluate strategies across market conditions
 
-1. [ ] Implement regime classifier (5 regimes from BTC data)
-2. [ ] Split backtest data by regime
-3. [ ] Add regime_scores to FitnessResult
-4. [ ] Implement regime multiplier in fitness
-5. [ ] Add disqualification for negative regime Sharpe
+1. [x] Implement regime classifier (5 regimes from BTC data)
+2. [x] Split backtest data by regime
+3. [x] Add regime_scores to FitnessResult
+4. [x] Implement regime multiplier in fitness
+5. [x] Add disqualification for negative regime Sharpe
 
-**Success:** Strategies with poor bear-market performance get penalized.
+**Success:** Strategies with poor bear-market performance get penalized. ✅
+
+**Implementation Notes (12/08/2025 05:58 PM PST via pst-timestamp):**
+- Files created: `shared/evolution/fitness/regime_classifier.py`
+- Updated: `shared/evolution/fitness/calculator.py` (added `calculate_fitness_with_regimes`, `aggregate_regime_results`)
+- Updated: `shared/evolution/backtester/engine.py` (added `run_by_regime` method)
+- Updated: `crypto/evolve.py` (added `--regime` flag)
+- Regime thresholds: ±2% return for bull/bear, 70th percentile ATR for volatile
+- Run with: `python evolve.py --regime --symbol=SOLUSDT`
+- Note: Need more data (days/weeks) to see meaningful regime distribution across all 5 regimes
 
 ### Phase 2C: Full Backtester
 **Goal:** Multi-symbol, realistic execution
@@ -873,4 +882,5 @@ depends on starting population quality.
 | 2025-12-08 | Review: Fixed DD formula inconsistency, clarified regime rules, added LLM logging/retry requirements, restructured phases for vertical slice approach, added data distribution note, marked success criteria as initial benchmarks | Claude |
 | 2025-12-08 | Added provider-agnostic LLM interface (OpenAI/Anthropic), added Section 0 for shared vs asset-specific architecture, updated all task tables with full paths and asset-agnostic notes, renamed btc_candles → benchmark_candles throughout | Claude |
 | 2025-12-08 | **Phase 2A COMPLETE**: Implemented minimal backtester, fitness calculator, LLM client (OpenAI+Anthropic), strategy generator, and evolution loop. Successfully tested end-to-end pipeline with `crypto/evolve.py`. | Claude |
+| 2025-12-08 | **Phase 2B COMPLETE**: Implemented regime classifier, split_by_regime, calculate_fitness_with_regimes, run_by_regime backtester method. Added --regime flag to evolve.py. Successfully tested with 1000+ candles. | Claude |
 
