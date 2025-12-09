@@ -7,7 +7,7 @@ from pathlib import Path
 
 from config import settings
 from logs import setup_logging
-from data.ingestion.bybit_ws import BybitWebSocketClient
+from data.ingestion.bybit_ws import BybitWebSocketClient, ConnectionState
 from data.storage.repository import CandleRepository
 from data.storage.models import Candle
 from data.quality_filters import CandleValidator
@@ -55,6 +55,19 @@ class CryptoAlphaSystem:
         self._running = False
         self._candle_count = 0
         self._symbols = SYMBOLS
+        self._connection_state = ConnectionState.DISCONNECTED
+        self._trading_paused = True  # Start paused until READY
+
+    async def on_connection_state_change(self, new_state: ConnectionState) -> None:
+        """Handle connection state changes."""
+        self._connection_state = new_state
+
+        if new_state == ConnectionState.READY:
+            self._trading_paused = False
+            self.trade_logger.info("Trading RESUMED - system ready")
+        else:
+            self._trading_paused = True
+            self.trade_logger.info(f"Trading PAUSED - connection state: {new_state.value}")
 
     async def on_candle(self, candle: Candle) -> None:
         """Callback for each new candle from WebSocket."""
@@ -100,7 +113,8 @@ class CryptoAlphaSystem:
             btc_df = self._candles_to_df(btc_candles)
 
             # Process through shadow trader (skip BTC itself)
-            if candle.symbol != "BTCUSDT":
+            # Only trade when connection is READY
+            if candle.symbol != "BTCUSDT" and not self._trading_paused:
                 signal = self.trader.process_candle(candle.symbol, df, btc_df)
                 if signal:
                     self.trade_logger.info(
@@ -133,6 +147,7 @@ class CryptoAlphaSystem:
             symbols=self._symbols,
             on_candle=self.on_candle,
             interval="1",
+            on_state_change=self.on_connection_state_change,
         )
 
         # Handle graceful shutdown

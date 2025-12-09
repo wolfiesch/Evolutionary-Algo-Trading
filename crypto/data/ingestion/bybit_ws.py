@@ -2,7 +2,8 @@
 import asyncio
 import json
 import logging
-from typing import Callable, Awaitable, TYPE_CHECKING
+from typing import Callable, Awaitable, TYPE_CHECKING, Optional
+from enum import Enum
 
 import aiohttp
 import websockets
@@ -16,6 +17,15 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 
+class ConnectionState(Enum):
+    """WebSocket connection states."""
+    DISCONNECTED = "disconnected"
+    CONNECTING = "connecting"
+    WARMING_UP = "warming_up"  # Backfilling historical data
+    CONNECTED = "connected"  # Connected but waiting for confirmed candles
+    READY = "ready"  # Received enough confirmed candles, safe to trade
+
+
 class BybitWebSocketClient:
     """WebSocket client for Bybit kline (candlestick) data."""
 
@@ -24,6 +34,7 @@ class BybitWebSocketClient:
         symbols: list[str],
         on_candle: Callable[[Candle], Awaitable[None]],
         interval: str = "1",
+        on_state_change: Optional[Callable[[ConnectionState], Awaitable[None]]] = None,
     ):
         """
         Initialize Bybit WebSocket client.
@@ -32,13 +43,33 @@ class BybitWebSocketClient:
             symbols: List of trading symbols (e.g., ["BTCUSDT", "ETHUSDT"])
             on_candle: Async callback to handle incoming candles
             interval: Kline interval in minutes (default: "1")
+            on_state_change: Optional callback for connection state changes
         """
         self.symbols = symbols
         self.on_candle = on_candle
+        self.on_state_change = on_state_change
         self.interval = interval
         self._running = False
         self._reconnect_delay = settings.reconnect_delay_seconds
         self._max_reconnect_delay = 60
+
+        # Connection state tracking
+        self._state = ConnectionState.DISCONNECTED
+        self._confirmed_candles_since_connect = 0
+        self._min_confirmed_candles = 2  # Wait for 2 confirmed candles before READY
+
+    async def _set_state(self, new_state: ConnectionState) -> None:
+        """Update connection state and notify callback."""
+        if new_state != self._state:
+            old_state = self._state
+            self._state = new_state
+            logger.info(f"Connection state: {old_state.value} -> {new_state.value}")
+
+            if self.on_state_change:
+                try:
+                    await self.on_state_change(new_state)
+                except Exception as e:
+                    logger.error(f"Error in state change callback: {e}", exc_info=True)
 
     async def run(self) -> None:
         """
@@ -52,11 +83,13 @@ class BybitWebSocketClient:
 
         while self._running:
             try:
+                await self._set_state(ConnectionState.CONNECTING)
                 await self._connect_and_stream()
                 # Reset delay on successful connection
                 current_delay = self._reconnect_delay
             except Exception as e:
                 logger.error(f"WebSocket error: {e}", exc_info=True)
+                await self._set_state(ConnectionState.DISCONNECTED)
 
                 if self._running:
                     logger.info(f"Reconnecting in {current_delay}s...")
@@ -78,10 +111,17 @@ class BybitWebSocketClient:
             logger.info("WebSocket connected")
 
             # Perform warmup: fetch historical candles via REST
+            await self._set_state(ConnectionState.WARMING_UP)
             await self._warmup()
 
             # Subscribe to kline topics
             await self._subscribe(ws)
+
+            # Reset confirmed candle counter and transition to CONNECTED
+            # Will transition to READY after receiving min_confirmed_candles
+            self._confirmed_candles_since_connect = 0
+            await self._set_state(ConnectionState.CONNECTED)
+            logger.info(f"Waiting for {self._min_confirmed_candles} confirmed candles before trading...")
 
             # Process incoming messages
             async for message in ws:
@@ -122,7 +162,8 @@ class BybitWebSocketClient:
                 "low": "49900.0",
                 "close": "50050.0",
                 "volume": "123.456",
-                "turnover": "6172800.0"
+                "turnover": "6172800.0",
+                "confirm": true  # true = candle closed, false = still forming
             }]
         }
         """
@@ -144,6 +185,25 @@ class BybitWebSocketClient:
         candle_data_list = data.get("data", [])
         for candle_data in candle_data_list:
             try:
+                # Only process confirmed candles to avoid indicator corruption
+                # Bybit sends both forming and confirmed candles - we only want confirmed
+                is_confirmed = candle_data.get("confirm", False)
+                if not is_confirmed:
+                    logger.debug(f"Skipping unconfirmed candle for {symbol}")
+                    continue
+
+                # Count confirmed candles after reconnect to ensure data integrity
+                if self._state == ConnectionState.CONNECTED:
+                    self._confirmed_candles_since_connect += 1
+                    logger.info(
+                        f"Confirmed candle {self._confirmed_candles_since_connect}/"
+                        f"{self._min_confirmed_candles} for {symbol}"
+                    )
+
+                    if self._confirmed_candles_since_connect >= self._min_confirmed_candles:
+                        await self._set_state(ConnectionState.READY)
+                        logger.info("System ready to trade")
+
                 candle = self._parse_candle(symbol, candle_data)
                 await self.on_candle(candle)
             except Exception as e:
@@ -253,6 +313,16 @@ class BybitWebSocketClient:
                     logger.error(f"Error parsing historical candle: {e}")
 
             return candles
+
+    @property
+    def state(self) -> ConnectionState:
+        """Get current connection state."""
+        return self._state
+
+    @property
+    def is_ready(self) -> bool:
+        """Check if system is ready to trade."""
+        return self._state == ConnectionState.READY
 
     def stop(self) -> None:
         """Signal to stop the client."""
