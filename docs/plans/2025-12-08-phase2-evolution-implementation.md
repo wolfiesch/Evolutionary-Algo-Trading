@@ -831,14 +831,39 @@ then deepen each component. This validates integration early and finds issues fa
 - Run with: `python evolve.py --full --generations=10 --population=10`
 - Resume from checkpoint: `python evolve.py --full --resume=path/to/checkpoint.json`
 
-### Phase 2E: Production Integration
+### Phase 2E: Production Integration ✅ **COMPLETE**
 **Goal:** Connect to live system
 
-1. [ ] Strategy persistence (save/load JSON)
-2. [ ] Best strategy → shadow trader handoff
-3. [ ] Evolution scheduling (nightly runs)
-4. [ ] Monitoring dashboard / alerts
-5. [ ] Documentation
+1. [x] Strategy persistence (save/load JSON)
+2. [x] Best strategy → shadow trader handoff
+3. [x] Evolution scheduling (nightly runs)
+4. [x] Monitoring dashboard / alerts
+5. [x] Documentation
+
+**Success:** Full production integration with persistence, handoff, scheduling, and monitoring. ✅
+
+**Implementation Notes (12/09/2025 06:32 AM PST via pst-timestamp):**
+- New files: `shared/evolution/persistence/strategy_store.py`, `shared/evolution/persistence/handoff.py`
+- New files: `crypto/scheduler.py`, `crypto/monitoring.py`
+- Also updated: `shared/evolution/fitness/regime_classifier.py` (adaptive thresholds for different window sizes)
+- Backfilled 90 days of historical data (BTCUSDT, ETHUSDT, SOLUSDT) - 129,600 candles per symbol
+- Strategy persistence: StrategyStore with save/load/list/delete, StrategyRecord with full metadata
+- Shadow handoff: Qualification checks (Sharpe ≥0.5, 4/5 regimes, DD <20%, 30+ trades), automatic promotion
+- Scheduler: Configurable intervals, nightly runs at 2 AM UTC, automatic handoff to shadow pool
+- Monitoring: CLI dashboard with data status, evolution status, shadow pool health, alerts
+
+**Run commands:**
+```bash
+# Evolution scheduler
+python scheduler.py --start              # Start scheduler (runs at 2 AM UTC)
+python scheduler.py --run-now            # Run evolution immediately
+python scheduler.py --dry-run            # Test without running
+
+# Monitoring
+python monitoring.py                     # Show dashboard
+python monitoring.py --watch             # Watch mode (refresh every 30s)
+python monitoring.py --check-alerts      # Check alerts only
+```
 
 ---
 
@@ -904,4 +929,5 @@ depends on starting population quality.
 | 2025-12-08 | **Phase 2B COMPLETE**: Implemented regime classifier, split_by_regime, calculate_fitness_with_regimes, run_by_regime backtester method. Added --regime flag to evolve.py. Successfully tested with 1000+ candles. | Claude |
 | 2025-12-08 | **Phase 2C COMPLETE**: Implemented PortfolioBacktester (multi-symbol with position limits), WalkForwardValidator (rolling window validation). Added --portfolio, --walkforward, --symbols flags. Successfully tested portfolio mode with SOLUSDT+ETHUSDT. | Claude |
 | 2025-12-08 | **Phase 2D COMPLETE**: Implemented full EvolutionEngine with tournament/elite/roulette selection, LLM-guided crossover, diversity tracking, and checkpoint/resume. Added --full, --resume, --checkpoint-dir flags. Successfully tested evolution loop with 3-member population. | Claude |
+| 2025-12-09 | **Phase 2E COMPLETE**: Implemented strategy persistence (StrategyStore, StrategyRecord), shadow trader handoff (HandoffConfig, qualify_for_shadow, promote_best_from_evolution), evolution scheduler (configurable nightly runs), and monitoring dashboard (CLI with alerts). Backfilled 90 days of historical data. Fixed regime classifier with adaptive thresholds. | Claude |
 
