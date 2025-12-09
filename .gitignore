@@ -1,5 +1,6 @@
 # macOS
 .DS_Store
+**/.DS_Store
 
 # Python
 __pycache__/
@@ -35,3 +36,12 @@ data/raw/
 # API keys
 config/settings.yaml
 secrets/
+
+# Logs
+logs/
+crypto/logs/
+forex/logs/
+
+# Claude session data
+.claude/data/sessions/
+crypto/.claude/
