@@ -1,4 +1,5 @@
 """Entry point for crypto-alpha system."""
+import argparse
 import asyncio
 import signal as sig
 import sys
@@ -12,10 +13,11 @@ from data.storage.repository import CandleRepository
 from data.storage.models import Candle
 from data.quality_filters import CandleValidator
 from execution.shadow.trader import ShadowTrader
+from execution.shadow.pool_manager import ShadowPoolManager
 from engine.strategy_logic.parser import GeneExpressionParser
 
 
-# Hardcoded test strategy (Phase 1)
+# Hardcoded test strategy (Phase 1 / fallback)
 TEST_STRATEGY = {
     "strategy_name": "Phase1_Test_RSI_Mean_Reversion",
     "entry_long": "btc_trend(60) >= 0 AND norm_rsi(14) < -0.6",
@@ -35,28 +37,57 @@ SYMBOLS = [
     "LDOUSDT", "RNDRUSDT", "SEIUSDT", "TIAUSDT", "JUPUSDT",
 ]
 
+# Phase 3: Reduced symbol set for initial shadow trading validation
+PHASE3_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+
 
 class CryptoAlphaSystem:
     """Main system orchestrator."""
 
-    def __init__(self):
+    def __init__(self, use_shadow_pool: bool = False, symbols: list[str] = None):
+        """
+        Initialize the crypto alpha system.
+
+        Args:
+            use_shadow_pool: If True, use multi-strategy shadow pool manager.
+                            If False, use single hardcoded strategy (Phase 1 mode).
+            symbols: List of symbols to trade. Defaults to PHASE3_SYMBOLS if shadow pool,
+                    otherwise full SYMBOLS list.
+        """
         # Setup logging first
         self.trade_logger, self.error_logger = setup_logging(settings.logs_dir)
         self.trade_logger.info("Initializing crypto-alpha system")
+
+        # Mode selection
+        self.use_shadow_pool = use_shadow_pool
 
         # Initialize components
         self.repository = CandleRepository(settings.sqlite_path)
         self.validator = CandleValidator()
         self.parser = GeneExpressionParser()
-        self.strategy = self.parser.parse(TEST_STRATEGY)
-        self.trader = ShadowTrader(self.strategy)
+
+        if use_shadow_pool:
+            # Phase 3: Multi-strategy shadow pool
+            self.pool_manager = ShadowPoolManager()
+            self.trader = None
+            self.strategy = None
+            self._symbols = symbols or PHASE3_SYMBOLS
+            self.trade_logger.info(
+                f"Shadow pool mode: {self.pool_manager.get_stats()['strategies_loaded']} strategies loaded"
+            )
+        else:
+            # Phase 1: Single hardcoded strategy
+            self.strategy = self.parser.parse(TEST_STRATEGY)
+            self.trader = ShadowTrader(self.strategy)
+            self.pool_manager = None
+            self._symbols = symbols or SYMBOLS
 
         # State
         self._running = False
         self._candle_count = 0
-        self._symbols = SYMBOLS
         self._connection_state = ConnectionState.DISCONNECTED
         self._trading_paused = True  # Start paused until READY
+        self._current_prices: dict[str, float] = {}  # Track latest prices
 
     async def on_connection_state_change(self, new_state: ConnectionState) -> None:
         """Handle connection state changes."""
@@ -91,6 +122,9 @@ class CryptoAlphaSystem:
             self.repository.insert(candle)
             self._candle_count += 1
 
+            # Track current prices for stop-loss checks
+            self._current_prices[candle.symbol] = candle.close
+
             # Log progress every 100 candles
             if self._candle_count % 100 == 0:
                 self.trade_logger.info(
@@ -115,11 +149,25 @@ class CryptoAlphaSystem:
             # Process through shadow trader (skip BTC itself)
             # Only trade when connection is READY
             if candle.symbol != "BTCUSDT" and not self._trading_paused:
-                signal = self.trader.process_candle(candle.symbol, df, btc_df)
-                if signal:
-                    self.trade_logger.info(
-                        f"Signal: {signal.value} for {candle.symbol}"
+                if self.use_shadow_pool:
+                    # Phase 3: Multi-strategy mode
+                    signals = self.pool_manager.process_candle(
+                        symbol=candle.symbol,
+                        candles=df,
+                        btc_candles=btc_df,
+                        current_prices=self._current_prices,
                     )
+                    for strategy_id, signal in signals:
+                        self.trade_logger.info(
+                            f"Signal: {signal.value} for {candle.symbol} [{strategy_id}]"
+                        )
+                else:
+                    # Phase 1: Single strategy mode
+                    signal = self.trader.process_candle(candle.symbol, df, btc_df)
+                    if signal:
+                        self.trade_logger.info(
+                            f"Signal: {signal.value} for {candle.symbol}"
+                        )
 
         except Exception as e:
             self.error_logger.exception(f"Error processing candle: {e}")
@@ -137,10 +185,17 @@ class CryptoAlphaSystem:
     async def run(self) -> None:
         """Main run loop."""
         self._running = True
-        self.trade_logger.info(f"Starting with {len(self._symbols)} symbols")
-        self.trade_logger.info(f"Strategy: {self.strategy.name}")
-        self.trade_logger.info(f"Entry: {self.strategy.entry_long}")
-        self.trade_logger.info(f"Exit: {self.strategy.exit_long}")
+        self.trade_logger.info(f"Starting with {len(self._symbols)} symbols: {self._symbols}")
+
+        if self.use_shadow_pool:
+            stats = self.pool_manager.get_stats()
+            self.trade_logger.info(f"Mode: Shadow Pool ({stats['strategies_loaded']} strategies)")
+            self.trade_logger.info(f"Initial equity: ${stats['initial_equity']:.2f}")
+        else:
+            self.trade_logger.info(f"Mode: Single Strategy")
+            self.trade_logger.info(f"Strategy: {self.strategy.name}")
+            self.trade_logger.info(f"Entry: {self.strategy.entry_long}")
+            self.trade_logger.info(f"Exit: {self.strategy.exit_long}")
 
         # Create WebSocket client
         client = BybitWebSocketClient(
@@ -157,13 +212,26 @@ class CryptoAlphaSystem:
             client.stop()
 
             # Print final stats
-            stats = self.trader.get_stats()
             self.trade_logger.info("=== Final Stats ===")
             self.trade_logger.info(f"Total candles: {self._candle_count}")
-            self.trade_logger.info(f"Equity: ${stats['equity']:.2f}")
-            self.trade_logger.info(f"Total P&L: ${stats['total_pnl']:.2f} ({stats['total_pnl_pct']:.2f}%)")
-            self.trade_logger.info(f"Trades: {stats['trade_count']}")
-            self.trade_logger.info(f"Win rate: {stats['win_rate']:.1%}")
+
+            if self.use_shadow_pool:
+                stats = self.pool_manager.get_stats()
+                self.trade_logger.info(f"Paper Equity: ${stats['paper_equity']:.2f}")
+                self.trade_logger.info(f"Total P&L: ${stats['total_pnl']:.2f} ({stats['total_pnl_pct']:.2f}%)")
+                self.trade_logger.info(f"Open positions: {stats['open_positions']}")
+                self.trade_logger.info("Strategy Performance:")
+                for sid, perf in stats['strategy_performance'].items():
+                    self.trade_logger.info(
+                        f"  {perf['name']}: {perf['trade_count']} trades, "
+                        f"{perf['win_rate']:.1%} win rate, ${perf['total_pnl']:.2f} P&L"
+                    )
+            else:
+                stats = self.trader.get_stats()
+                self.trade_logger.info(f"Equity: ${stats['equity']:.2f}")
+                self.trade_logger.info(f"Total P&L: ${stats['total_pnl']:.2f} ({stats['total_pnl_pct']:.2f}%)")
+                self.trade_logger.info(f"Trades: {stats['trade_count']}")
+                self.trade_logger.info(f"Win rate: {stats['win_rate']:.1%}")
 
         sig.signal(sig.SIGINT, shutdown)
         sig.signal(sig.SIGTERM, shutdown)
@@ -175,7 +243,39 @@ class CryptoAlphaSystem:
 
 async def main():
     """Entry point."""
-    system = CryptoAlphaSystem()
+    parser = argparse.ArgumentParser(
+        description="Crypto Alpha Trading System"
+    )
+    parser.add_argument(
+        "--shadow-pool",
+        action="store_true",
+        help="Use multi-strategy shadow pool (Phase 3 mode)",
+    )
+    parser.add_argument(
+        "--symbols",
+        type=str,
+        default=None,
+        help="Comma-separated list of symbols to trade (e.g., BTCUSDT,ETHUSDT,SOLUSDT)",
+    )
+    parser.add_argument(
+        "--all-symbols",
+        action="store_true",
+        help="Use all 29 symbols instead of Phase 3 default",
+    )
+
+    args = parser.parse_args()
+
+    # Determine symbols
+    symbols = None
+    if args.symbols:
+        symbols = [s.strip().upper() for s in args.symbols.split(",")]
+    elif args.all_symbols:
+        symbols = SYMBOLS
+
+    system = CryptoAlphaSystem(
+        use_shadow_pool=args.shadow_pool,
+        symbols=symbols,
+    )
     await system.run()
 
 
