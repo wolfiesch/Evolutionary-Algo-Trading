@@ -14,6 +14,7 @@ from data.storage.models import Candle
 from data.quality_filters import CandleValidator
 from execution.shadow.trader import ShadowTrader
 from execution.shadow.pool_manager import ShadowPoolManager
+from execution.shadow.hot_reload import check_reload_signal
 from engine.strategy_logic.parser import GeneExpressionParser
 
 
@@ -88,6 +89,7 @@ class CryptoAlphaSystem:
         self._connection_state = ConnectionState.DISCONNECTED
         self._trading_paused = True  # Start paused until READY
         self._current_prices: dict[str, float] = {}  # Track latest prices
+        self._reload_check_counter = 0  # Check for hot-reload every N candles
 
     async def on_connection_state_change(self, new_state: ConnectionState) -> None:
         """Handle connection state changes."""
@@ -131,6 +133,17 @@ class CryptoAlphaSystem:
                     f"Processed {self._candle_count} candles, "
                     f"DB has {self.repository.count()} total"
                 )
+
+            # Check for hot-reload signal (every 50 candles, ~50 seconds)
+            self._reload_check_counter += 1
+            if self.use_shadow_pool and self._reload_check_counter >= 50:
+                self._reload_check_counter = 0
+                if check_reload_signal():
+                    old_count = len(self.pool_manager.strategies)
+                    new_count = self.pool_manager.reload_strategies()
+                    self.trade_logger.info(
+                        f"Hot-reload: {old_count} -> {new_count} strategies"
+                    )
 
             # Get enough history for indicators (need at least 100 candles)
             candles = self.repository.get_latest(candle.symbol, limit=200)

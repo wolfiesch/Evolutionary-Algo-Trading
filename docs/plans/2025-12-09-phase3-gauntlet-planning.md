@@ -111,37 +111,57 @@ All processes should be managed by supervisor/systemd for auto-restart:
 - Hot-reload support via `reload_strategies()` method
 - Run with: `python main.py --shadow-pool`
 
-### Phase 3B: Live System Integration
+### Phase 3B: Live System Integration ✅ **COMPLETE**
 **Goal:** Connect all components for continuous operation
 
 **Tasks:**
-- [ ] Integrate shadow trader with live WebSocket data
-- [ ] Set up process supervision (supervisor.conf)
-- [ ] Configure scheduler for nightly evolution runs
-- [ ] Implement strategy hot-reload (load new strategies without restart)
-- [ ] Add shadow position sizing based on paper equity
+- [x] Integrate shadow trader with live WebSocket data
+- [x] Set up process supervision (supervisor.conf)
+- [x] Configure scheduler for nightly evolution runs
+- [x] Implement strategy hot-reload (load new strategies without restart)
+- [x] Add shadow position sizing based on paper equity
 
-**Files to Create/Modify:**
-- `crypto/main.py` - Add shadow trader integration
-- `crypto/supervisor.conf` - Process supervision config
-- `crypto/config.py` - Add shadow trading settings
+**Files Created/Modified:**
+- `crypto/main.py` - Added hot-reload signal checking
+- `crypto/supervisor.conf` - Process supervision for 3 processes (NEW)
+- `crypto/execution/shadow/hot_reload.py` - File watcher with debounce (NEW)
+- `crypto/Dockerfile` - Updated to use supervisord
 
-### Phase 3C: Monitoring & Alerting
+**Implementation Notes (12/09/2025 09:04 AM PST):**
+- Supervisor manages: shadow_trader, scheduler, hot_reload processes
+- Hot-reload watcher polls every 5s with 3s debounce
+- Signal file `.reload_strategies` triggers reload in main process
+- Main.py checks for reload every ~50 candles (~50 seconds)
+- Position sizing uses `risk_per_trade` (1%) and `max_position_pct` (10%)
+
+### Phase 3C: Monitoring & Alerting ✅ **COMPLETE**
 **Goal:** Know immediately when something goes wrong
 
 **Tasks:**
-- [ ] Extend monitoring dashboard for shadow trading metrics
-- [ ] Add Slack/Discord webhook alerts
-- [ ] Create daily performance summary reports
-- [ ] Implement health check endpoint
-- [ ] Add regime detection monitoring
+- [x] Extend monitoring dashboard for shadow trading metrics
+- [x] Add Slack/Discord webhook alerts
+- [x] Create daily performance summary reports
+- [x] Implement health check endpoint
+- [ ] Add regime detection monitoring (deferred to Phase 3E)
+
+**Files Created/Modified:**
+- `crypto/monitoring.py` - Extended with paper equity tracking, webhook alerts, daily reports, health check
+
+**Implementation Notes (12/09/2025 09:13 AM PST):**
+- New dashboard sections: Paper Equity (with drawdown %), Today's Performance
+- `WebhookAlerter` class supports both Slack and Discord webhook formats
+- Alert thresholds from CLAUDE.md: 5% DD warning, 10% DD critical, 15% DD emergency
+- New CLI options: `--daily-report`, `--send-alert`, `--health-check`, `--send-alerts`
+- Health check returns exit codes: 0=OK, 1=CRITICAL (for cron/scripts)
+- Daily reports saved to `logs/daily_reports/` and optionally sent via webhook
+- Set `ALERT_WEBHOOK_URL` env var to enable webhook alerts
 
 **Alert Conditions:**
-- Shadow drawdown > 5% (warning), > 10% (critical)
+- Shadow drawdown > 5% (warning), > 10% (critical), > 15% (emergency)
 - No trades in 24 hours (warning)
 - Evolution run failed (warning)
-- Process crash (critical)
-- Data staleness > 1 hour (critical)
+- Data staleness > 60 minutes (warning/critical)
+- Process crash (critical) - handled by supervisor autorestart
 
 ### Phase 3D: Slippage Calibration
 **Goal:** Tune friction model to match reality
@@ -474,3 +494,5 @@ From CLAUDE.md, applied to shadow trading:
 |------|--------|--------|
 | 12/09/2025 06:52 AM PST | Initial Phase 3 plan created | Claude |
 | 12/09/2025 07:29 AM PST | **Phase 3A COMPLETE**: Implemented ShadowPoolManager for multi-strategy trading. Features: load strategies from shadow pool, per-strategy performance tracking, stop-loss enforcement, kill switch (5% hourly / 15% total DD), hot-reload support. Updated main.py with --shadow-pool flag. | Claude |
+| 12/09/2025 09:04 AM PST | **Phase 3B COMPLETE**: Implemented process supervision and hot-reload. Created `supervisor.conf` for managing 3 processes (shadow_trader, scheduler, hot_reload). Added `hot_reload.py` file watcher with debounce. Updated Dockerfile to use supervisord as entrypoint. Main.py now checks for reload signal every ~50 candles. | Claude |
+| 12/09/2025 09:13 AM PST | **Phase 3C COMPLETE**: Extended monitoring with paper equity tracking, webhook alerts (Slack/Discord), daily performance reports, and health check endpoint. New CLI: `--daily-report`, `--send-alert`, `--health-check`. Alert thresholds from CLAUDE.md. Fixed dataclass ordering bug in strategy_store.py. | Claude |

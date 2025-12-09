@@ -29,11 +29,13 @@ class StrategyRecord:
     # Identity
     id: str  # Unique ID (uuid)
     name: str  # Human-readable name
-    version: int = 1  # Version for tracking mutations
 
-    # Strategy logic
+    # Strategy logic (required fields)
     entry_long: str
     exit_long: str
+
+    # Optional fields with defaults
+    version: int = 1  # Version for tracking mutations
     entry_short: Optional[str] = None
     exit_short: Optional[str] = None
 
