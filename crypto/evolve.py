@@ -1,5 +1,5 @@
 """
-Phase 2C: Full Evolution Loop with Portfolio & Walk-Forward
+Phase 2D: Full Evolution Engine with Selection, Crossover & Checkpointing
 
 Entry point for LLM-driven strategy evolution.
 
@@ -9,6 +9,7 @@ Usage:
     python evolve.py --generations=5 --symbol=SOLUSDT --regime       # Enable regime testing
     python evolve.py --generations=3 --portfolio                      # Multi-symbol portfolio
     python evolve.py --generations=3 --symbol=SOLUSDT --walkforward  # Walk-forward validation
+    python evolve.py --generations=10 --full                          # Phase 2D full evolution engine
 
 Requirements:
     - OPENAI_API_KEY or ANTHROPIC_API_KEY environment variable
@@ -49,6 +50,10 @@ from shared.evolution.mutator import (
     StrategyGenerator,
     GeneratedStrategy,
     generate_initial_population,
+    # Phase 2D components
+    EvolutionConfig,
+    EvolutionEngine,
+    CrossoverOperator,
 )
 
 # Configure logging
@@ -620,9 +625,205 @@ def run_evolution(
     logger.info(f"\nCompleted at: {datetime.now().strftime('%m/%d/%Y %I:%M %p')}")
 
 
+def run_full_evolution(
+    symbol: str,
+    generations: int = 10,
+    population_size: int = 10,
+    db_path: Path = None,
+    log_dir: Path = None,
+    checkpoint_dir: Path = None,
+    resume_from: str = None,
+):
+    """
+    Run Phase 2D full evolution with the EvolutionEngine.
+
+    Features tournament selection, crossover, elite preservation,
+    diversity tracking, and checkpoint/resume capability.
+
+    Args:
+        symbol: Trading symbol (e.g., "SOLUSDT")
+        generations: Number of evolution generations
+        population_size: Number of strategies per generation
+        db_path: Path to SQLite database
+        log_dir: Directory for logs
+        checkpoint_dir: Directory for checkpoints
+        resume_from: Path to checkpoint file to resume from
+    """
+    if db_path is None:
+        cloud_db = Path(__file__).parent / "data" / "candles_cloud.db"
+        db_path = cloud_db if cloud_db.exists() else settings.sqlite_path
+
+    if log_dir is None:
+        log_dir = settings.logs_dir
+
+    if checkpoint_dir is None:
+        checkpoint_dir = log_dir / "checkpoints"
+
+    logger.info("=" * 60)
+    logger.info("PHASE 2D: FULL EVOLUTION ENGINE")
+    logger.info("=" * 60)
+    logger.info(f"Symbol: {symbol}")
+    logger.info(f"Generations: {generations}")
+    logger.info(f"Population size: {population_size}")
+    logger.info(f"Database: {db_path}")
+    logger.info(f"Checkpoint dir: {checkpoint_dir}")
+    if resume_from:
+        logger.info(f"Resuming from: {resume_from}")
+    logger.info("=" * 60)
+
+    # Initialize components
+    logger.info("Initializing components...")
+
+    # Repository
+    repo = CandleRepository(db_path)
+
+    # Convert to DataFrames
+    def candles_to_df(candles):
+        return pd.DataFrame([{
+            'open': c.open,
+            'high': c.high,
+            'low': c.low,
+            'close': c.close,
+            'volume': c.volume,
+            'timestamp': c.timestamp,
+        } for c in candles])
+
+    # Load candles
+    logger.info("Loading candles...")
+    btc_candles = repo.get_latest("BTCUSDT", limit=5000)
+    if len(btc_candles) < 80:
+        logger.error(f"Insufficient BTC data: {len(btc_candles)} candles (need 80+)")
+        return
+
+    symbol_candles = repo.get_latest(symbol, limit=5000)
+    if len(symbol_candles) < 80:
+        logger.error(f"Insufficient {symbol} data: {len(symbol_candles)} candles (need 80+)")
+        return
+
+    btc_df = candles_to_df(btc_candles)
+    symbol_df = candles_to_df(symbol_candles)
+    logger.info(f"Loaded {len(symbol_df)} {symbol} candles, {len(btc_df)} BTC candles")
+
+    # Initialize backtester
+    backtest_config = BacktestConfig(
+        initial_equity=10_000,
+        friction_per_side=0.0025,
+        max_position_pct=0.10,
+        stop_loss_pct=0.03,
+    )
+    backtester = MinimalBacktester(backtest_config)
+    parser = GeneExpressionParser()
+
+    # Initialize LLM
+    logger.info("Initializing LLM client...")
+    try:
+        llm_client = create_default_client(log_dir=log_dir)
+        logger.info(f"Using LLM provider: {llm_client.config.provider.value}")
+    except ValueError as e:
+        logger.error(f"LLM initialization failed: {e}")
+        return
+
+    # Initialize generator and crossover
+    generator = StrategyGenerator(
+        llm_client=llm_client,
+        market_filter_name="btc_trend",
+    )
+    crossover = CrossoverOperator(
+        llm_client=llm_client,
+        market_filter_name="btc_trend",
+    )
+
+    # Create evaluation function
+    def eval_strategy(generated: GeneratedStrategy) -> tuple[FitnessResult, dict]:
+        try:
+            strategy = parser.parse(generated.to_dict())
+            evaluator = create_evaluator(strategy, parser)
+
+            results = backtester.run(
+                evaluator=evaluator,
+                candles=symbol_df,
+                benchmark_candles=btc_df,
+                symbol=symbol,
+            )
+            fitness = calculate_fitness(results)
+            return fitness, results.summary()
+        except Exception as e:
+            logger.error(f"Evaluation error for {generated.name}: {e}")
+            return FitnessResult(
+                disqualified=True,
+                disqualification_reason=f"Evaluation error: {str(e)}"
+            ), {}
+
+    # Configure evolution
+    config = EvolutionConfig(
+        population_size=population_size,
+        generations=generations,
+        elite_count=2,
+        mutation_rate=0.7,
+        crossover_rate=0.3,
+        tournament_size=3,
+        max_stagnation=5,
+        checkpoint_interval=3,
+        checkpoint_dir=str(checkpoint_dir),
+    )
+
+    # Create engine
+    engine = EvolutionEngine(
+        config=config,
+        generator=generator,
+        crossover=crossover,
+        evaluator=eval_strategy,
+    )
+
+    # Run evolution
+    if resume_from:
+        result = engine.run(resume_from=resume_from)
+    else:
+        # Generate initial population
+        logger.info(f"Generating initial population of {population_size}...")
+        initial_pop = generate_initial_population(generator, size=population_size)
+
+        if not initial_pop:
+            logger.error("Failed to generate initial population")
+            return
+
+        result = engine.run(initial_population=initial_pop)
+
+    # Final results
+    logger.info(f"\n{'=' * 60}")
+    logger.info("EVOLUTION COMPLETE")
+    logger.info("=" * 60)
+
+    logger.info(f"Generations run: {result.generations_run}")
+    logger.info(f"Early stopped: {result.early_stopped}")
+
+    if result.best_strategy and result.best_fitness:
+        logger.info(f"\nBest Strategy: {result.best_strategy.name}")
+        logger.info(f"  Entry: {result.best_strategy.entry_long}")
+        logger.info(f"  Exit: {result.best_strategy.exit_long}")
+        logger.info(f"  Final Score: {result.best_fitness.final_score:.3f}")
+        logger.info(f"  Sharpe: {result.best_fitness.sharpe_ratio:.2f}")
+        logger.info(f"  Max DD: {result.best_fitness.max_drawdown:.1%}")
+        logger.info(f"  Win Rate: {result.best_fitness.win_rate:.1%}")
+        logger.info(f"  Trades: {result.best_fitness.trade_count}")
+    else:
+        logger.warning("No viable strategy found")
+
+    # Show fitness progression
+    if result.fitness_history:
+        logger.info("\nFitness Progression:")
+        for entry in result.fitness_history[-5:]:  # Last 5 generations
+            logger.info(f"  Gen {entry['generation']}: Best={entry['best_score']:.3f}, "
+                       f"Avg={entry['avg_score']:.3f}, Diversity={entry['diversity']:.2f}")
+
+    logger.info(f"\nCompleted at: {datetime.now().strftime('%m/%d/%Y %I:%M %p')}")
+
+    return result
+
+
 def main():
     arg_parser = argparse.ArgumentParser(
-        description="Phase 2C: Evolution Loop with Portfolio & Walk-Forward"
+        description="Phase 2D: Evolution Loop with Selection, Crossover & Checkpointing"
     )
     arg_parser.add_argument(
         "--symbol",
@@ -669,22 +870,53 @@ def main():
         default="SOLUSDT,ETHUSDT",
         help="Comma-separated symbols for portfolio mode (default: SOLUSDT,ETHUSDT)"
     )
+    # Phase 2D arguments
+    arg_parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Enable Phase 2D full evolution engine with tournament selection, crossover, checkpointing"
+    )
+    arg_parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Path to checkpoint file to resume from (Phase 2D only)"
+    )
+    arg_parser.add_argument(
+        "--checkpoint-dir",
+        type=str,
+        default=None,
+        help="Directory for checkpoints (Phase 2D only)"
+    )
 
     args = arg_parser.parse_args()
 
     db_path = Path(args.db) if args.db else None
-    portfolio_symbols = [s.strip() for s in args.symbols.split(",")]
 
-    run_evolution(
-        symbol=args.symbol,
-        generations=args.generations,
-        population_size=args.population,
-        db_path=db_path,
-        use_regime_testing=args.regime,
-        use_portfolio=args.portfolio,
-        use_walkforward=args.walkforward,
-        portfolio_symbols=portfolio_symbols,
-    )
+    # Phase 2D: Full evolution engine
+    if args.full:
+        checkpoint_dir = Path(args.checkpoint_dir) if args.checkpoint_dir else None
+        run_full_evolution(
+            symbol=args.symbol,
+            generations=args.generations,
+            population_size=args.population,
+            db_path=db_path,
+            checkpoint_dir=checkpoint_dir,
+            resume_from=args.resume,
+        )
+    else:
+        # Phase 2A/2B/2C: Simple evolution loop
+        portfolio_symbols = [s.strip() for s in args.symbols.split(",")]
+        run_evolution(
+            symbol=args.symbol,
+            generations=args.generations,
+            population_size=args.population,
+            db_path=db_path,
+            use_regime_testing=args.regime,
+            use_portfolio=args.portfolio,
+            use_walkforward=args.walkforward,
+            portfolio_symbols=portfolio_symbols,
+        )
 
 
 if __name__ == "__main__":

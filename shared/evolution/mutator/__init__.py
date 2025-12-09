@@ -17,6 +17,21 @@ from shared.evolution.mutator.prompts import (
     STRATEGY_THEMES,
     get_generation_prompt,
     get_mutation_prompt,
+    get_crossover_prompt,
+)
+from shared.evolution.mutator.selection import (
+    tournament_selection,
+    elite_selection,
+    roulette_selection,
+    rank_selection,
+    select_diverse_parents,
+)
+from shared.evolution.mutator.crossover import CrossoverOperator
+from shared.evolution.mutator.evolution import (
+    EvolutionConfig,
+    EvolutionState,
+    EvolutionResult,
+    EvolutionEngine,
 )
 
 __all__ = [
@@ -36,4 +51,18 @@ __all__ = [
     "STRATEGY_THEMES",
     "get_generation_prompt",
     "get_mutation_prompt",
+    "get_crossover_prompt",
+    # Selection (Phase 2D)
+    "tournament_selection",
+    "elite_selection",
+    "roulette_selection",
+    "rank_selection",
+    "select_diverse_parents",
+    # Crossover (Phase 2D)
+    "CrossoverOperator",
+    # Evolution Engine (Phase 2D)
+    "EvolutionConfig",
+    "EvolutionState",
+    "EvolutionResult",
+    "EvolutionEngine",
 ]

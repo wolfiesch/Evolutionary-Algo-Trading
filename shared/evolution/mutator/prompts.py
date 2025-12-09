@@ -113,6 +113,53 @@ STRATEGY_THEMES = [
 ]
 
 
+# Crossover prompt - combines two parent strategies
+CROSSOVER_PROMPT = """You are a quantitative strategy designer. Combine the best elements of these two parent strategies into a superior child strategy.
+
+## Parent Strategy A (Sharpe: {sharpe_a:.2f})
+Name: {name_a}
+Entry: {entry_a}
+Exit: {exit_a}
+
+## Parent Strategy B (Sharpe: {sharpe_b:.2f})
+Name: {name_b}
+Entry: {entry_b}
+Exit: {exit_b}
+
+## Available Primitives
+{market_filter_name}(window), ema_trend(fast, slow), price_position(period),
+norm_rsi(period), bb_position(period, std), bb_width_percentile(period),
+volume_intensity(period, threshold), vwap_distance(period),
+atr_regime(period), atr_percentile(period)
+
+## Task
+Create a child strategy that:
+1. Combines the strongest signals from both parents
+2. Takes entry conditions from the better-performing parent if themes differ
+3. Can mix primitives from both parents intelligently
+4. Maintains maximum 5 primitives per expression
+5. Keeps {market_filter_name}() >= 0 check in entry (MANDATORY)
+6. Uses INTEGER parameters only
+
+Consider:
+- If both parents use similar entry logic, take the better-tuned parameters
+- If parents have different styles (trend vs mean-reversion), prefer the higher-Sharpe approach
+- Exit logic can combine conditions with OR to capture multiple exit scenarios
+
+Return JSON:
+```json
+{{
+  "strategy_name": "Crossover_{name_a}_{name_b}",
+  "crossover_description": "Explanation of which elements came from which parent and why",
+  "entry_long": "<combined_entry>",
+  "exit_long": "<combined_exit>"
+}}
+```
+
+Return ONLY valid JSON, no other text.
+"""
+
+
 def get_generation_prompt(
     theme: str,
     market_filter_name: str = "btc_trend"
@@ -167,5 +214,46 @@ def get_mutation_prompt(
         win_rate=f"{win_rate * 100:.1f}",
         max_dd=f"{max_dd * 100:.1f}",
         trade_count=trade_count,
+        market_filter_name=market_filter_name,
+    )
+
+
+def get_crossover_prompt(
+    name_a: str,
+    entry_a: str,
+    exit_a: str,
+    sharpe_a: float,
+    name_b: str,
+    entry_b: str,
+    exit_b: str,
+    sharpe_b: float,
+    market_filter_name: str = "btc_trend",
+) -> str:
+    """
+    Get crossover prompt for combining two parent strategies.
+
+    Args:
+        name_a: Parent A strategy name
+        entry_a: Parent A entry expression
+        exit_a: Parent A exit expression
+        sharpe_a: Parent A Sharpe ratio
+        name_b: Parent B strategy name
+        entry_b: Parent B entry expression
+        exit_b: Parent B exit expression
+        sharpe_b: Parent B Sharpe ratio
+        market_filter_name: Name of market filter primitive
+
+    Returns:
+        Formatted prompt string
+    """
+    return CROSSOVER_PROMPT.format(
+        name_a=name_a,
+        entry_a=entry_a,
+        exit_a=exit_a,
+        sharpe_a=sharpe_a,
+        name_b=name_b,
+        entry_b=entry_b,
+        exit_b=exit_b,
+        sharpe_b=sharpe_b,
         market_filter_name=market_filter_name,
     )
