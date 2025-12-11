@@ -468,20 +468,24 @@
             `;
 
             // Recent Signals Card (wide)
-            const signalsHtml = (data.recent_signals.signals || []).slice(0, 10)
-                .map(signal => `
-                    <div class="signal-item ${signal.signal.includes('entry') ? 'entry' : 'exit'}">
-                        <div class="signal-header">
-                            <span>${signal.symbol} - ${signal.signal}</span>
-                            <span>${formatTime(signal.timestamp)}</span>
+            const signalsHtml = (data.recent_signals?.signals || []).slice(0, 10)
+                .map(signal => {
+                    const signalType = signal.signal || signal.event || 'unknown';
+                    const isEntry = signalType.toLowerCase().includes('entry');
+                    return `
+                        <div class="signal-item ${isEntry ? 'entry' : 'exit'}">
+                            <div class="signal-header">
+                                <span>${signal.symbol || 'N/A'} - ${signalType}</span>
+                                <span>${formatTime(signal.timestamp)}</span>
+                            </div>
+                            <div class="signal-details">
+                                ${signal.strategy ? `Strategy: ${signal.strategy} | ` : ''}
+                                Price: ${signal.price ? signal.price.toFixed(2) : 'N/A'}
+                                ${signal.gene_expression ? ` | BTC: ${signal.gene_expression.btc_trend || 'N/A'}` : ''}
+                            </div>
                         </div>
-                        <div class="signal-details">
-                            ${signal.strategy ? `Strategy: ${signal.strategy} | ` : ''}
-                            Price: ${signal.price ? signal.price.toFixed(2) : 'N/A'}
-                            ${signal.gene_expression ? ` | BTC: ${signal.gene_expression.btc_trend || 'N/A'}` : ''}
-                        </div>
-                    </div>
-                `).join('');
+                    `;
+                }).join('');
 
             const signalsCard = `
                 <div class="card wide-card">
