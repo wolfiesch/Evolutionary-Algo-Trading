@@ -11,6 +11,11 @@ primary_region = 'fra'
 [env]
   PYTHONUNBUFFERED = "1"
 
+# Persistent storage for candle database
+[mounts]
+  source = "crypto_data"
+  destination = "/data"
+
 # Background worker - no HTTP service needed
 # The app runs continuously processing WebSocket data
 

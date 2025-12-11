@@ -34,8 +34,16 @@ STRATEGY_GENERATION_PROMPT = """You are a quantitative trading strategy generato
 - INTEGER parameters only (14, not 14.5)
 - Common periods: 5, 9, 14, 20, 21, 50, 60
 - entry_long MUST start with: {market_filter_name}(N) >= 0 AND ...
-- Combine conditions with AND only (no OR in entry)
+- Combine conditions with AND (can use 2-3 conditions, avoid 4+ which rarely trigger)
 - Exit can use OR for multiple exit conditions
+
+## CRITICAL: Trade Frequency
+- Strategies with 0 trades are DISQUALIFIED
+- Avoid overly strict combinations that never trigger
+- Use moderate thresholds: norm_rsi < -0.3 (not -0.6), price_position < 1.0 (not 0)
+- Prefer 2-3 entry conditions over 4-5 (fewer conditions = more trades)
+- Example BAD: btc_trend >= 0 AND ema_trend > 0 AND norm_rsi < -0.5 AND price_position < 0 (too strict!)
+- Example GOOD: btc_trend >= 0 AND ema_trend > 0 AND norm_rsi < -0.2
 
 ## Strategy Theme: {theme}
 
@@ -75,10 +83,12 @@ atr_regime(period), atr_percentile(period)
 ## Mutation Instructions
 Suggest ONE small change to improve performance. Options:
 1. Adjust a parameter (e.g., 14 -> 20)
-2. Tighten/loosen a threshold (e.g., < -0.4 -> < -0.5)
-3. Add one primitive (if < 5 currently)
-4. Remove one primitive (if redundant)
+2. LOOSEN a threshold if trade_count is low (e.g., < -0.5 -> < -0.3 to get more trades)
+3. Remove one primitive if trade_count is 0 (fewer conditions = more trades!)
+4. Add one primitive only if trade_count is high (> 20)
 5. Change a primitive (swap similar ones)
+
+CRITICAL: If trade_count is 0-5, the strategy is TOO STRICT. Focus on REMOVING conditions or LOOSENING thresholds.
 
 ## Constraints
 - Keep {market_filter_name}() check in entry
@@ -102,14 +112,14 @@ Return ONLY valid JSON, no other text.
 
 # Strategy themes for diversity
 STRATEGY_THEMES = [
+    "Simple trend following with just 2 conditions",  # NEW: simpler strategies
     "Momentum continuation in uptrends",
-    "Mean reversion on oversold bounces",
+    "Mean reversion on oversold bounces (use RSI < -0.3, not -0.5)",  # Clearer threshold
     "Breakout on volatility expansion",
-    "Pullback buying in established trends",
+    "Pullback buying with loose thresholds",  # Emphasize loose
     "Range trading in sideways markets",
     "Volume-confirmed trend following",
-    "Low volatility breakout anticipation",
-    "RSI divergence with trend confirmation",
+    "Basic RSI mean reversion (keep it simple)",  # NEW: simpler
 ]
 
 

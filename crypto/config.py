@@ -1,7 +1,15 @@
 """Configuration management for crypto-alpha system."""
+import os
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, field_validator
 from pathlib import Path
+
+
+def _get_default_sqlite_path() -> Path:
+    """Get SQLite path - prefer /data volume if it exists (Fly.io), otherwise local."""
+    if Path("/data").exists():
+        return Path("/data/candles.db")
+    return Path(__file__).parent / "data" / "candles.db"
 
 
 class Settings(BaseSettings):
@@ -12,8 +20,8 @@ class Settings(BaseSettings):
     logs_dir: Path = Field(default=Path(__file__).parent / "logs")
     data_dir: Path = Field(default=Path(__file__).parent / "data")
 
-    # Database
-    sqlite_path: Path = Field(default=Path(__file__).parent / "data" / "candles.db")
+    # Database - use /data for persistent volume on Fly.io, fallback to local
+    sqlite_path: Path = Field(default_factory=_get_default_sqlite_path)
 
     # Bybit API (read-only for Phase 1)
     bybit_ws_url: str = Field(default="wss://stream.bybit.com/v5/public/linear")
