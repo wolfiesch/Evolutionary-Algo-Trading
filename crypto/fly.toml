@@ -5,7 +5,8 @@ app = 'crypto-alpha'
 primary_region = 'fra'
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = "../crypto/Dockerfile"
+  context = ".."
 
 [env]
   PYTHONUNBUFFERED = "1"
@@ -14,6 +15,6 @@ primary_region = 'fra'
 # The app runs continuously processing WebSocket data
 
 [[vm]]
-  memory = '512mb'
+  memory = '1gb'
   cpu_kind = 'shared'
   cpus = 1

@@ -345,9 +345,12 @@ def run_evolution(
         portfolio_symbols: List of symbols for portfolio mode (default: SOLUSDT, ETHUSDT)
     """
     if db_path is None:
-        # Try cloud database first, fall back to local
-        cloud_db = Path(__file__).parent / "data" / "candles_cloud.db"
-        db_path = cloud_db if cloud_db.exists() else settings.sqlite_path
+        # Use main database (settings.sqlite_path), fall back to cloud DB
+        db_path = settings.sqlite_path
+        if not db_path.exists():
+            cloud_db = Path(__file__).parent / "data" / "candles_cloud.db"
+            if cloud_db.exists():
+                db_path = cloud_db
 
     if log_dir is None:
         log_dir = settings.logs_dir
@@ -650,8 +653,12 @@ def run_full_evolution(
         resume_from: Path to checkpoint file to resume from
     """
     if db_path is None:
-        cloud_db = Path(__file__).parent / "data" / "candles_cloud.db"
-        db_path = cloud_db if cloud_db.exists() else settings.sqlite_path
+        # Use main database (settings.sqlite_path), fall back to cloud DB
+        db_path = settings.sqlite_path
+        if not db_path.exists():
+            cloud_db = Path(__file__).parent / "data" / "candles_cloud.db"
+            if cloud_db.exists():
+                db_path = cloud_db
 
     if log_dir is None:
         log_dir = settings.logs_dir

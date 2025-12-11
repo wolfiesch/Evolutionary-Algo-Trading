@@ -82,10 +82,18 @@ class MinimalBacktester:
             return self._empty_results(symbol)
 
         # Simulate through candles
+        # Memory optimization: use rolling window instead of growing window
+        # Most indicators (EMA, RSI, ATR) only need ~200 candles for accuracy
+        indicator_lookback = 200
+
         for i in range(warmup_period, len(candles)):
             # Get historical window for indicator calculation
-            window_candles = candles.iloc[:i+1].copy()
-            window_benchmark = benchmark_candles.iloc[:min(i+1, len(benchmark_candles))].copy()
+            # Use rolling window to prevent O(n²) memory growth
+            start_idx = max(0, i - indicator_lookback + 1)
+            window_candles = candles.iloc[start_idx:i+1].copy()
+            benchmark_end = min(i+1, len(benchmark_candles))
+            benchmark_start = max(0, benchmark_end - indicator_lookback)
+            window_benchmark = benchmark_candles.iloc[benchmark_start:benchmark_end].copy()
 
             current_candle = candles.iloc[i]
             current_price = current_candle['close']
