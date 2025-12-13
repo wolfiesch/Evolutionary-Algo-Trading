@@ -275,8 +275,30 @@ async def main():
         action="store_true",
         help="Use all 29 symbols instead of Phase 3 default",
     )
+    parser.add_argument(
+        "--run-lifecycle",
+        action="store_true",
+        help="Run strategy lifecycle review (retire/promote)",
+    )
 
     args = parser.parse_args()
+
+    if args.run_lifecycle:
+        from execution.shadow.pool_manager import ShadowPoolManager
+        from execution.shadow.lifecycle import StrategyLifecycleManager
+        
+        # Setup logging
+        setup_logging(settings.logs_dir)
+        
+        print("Running strategy lifecycle review...")
+        pool_manager = ShadowPoolManager()  # Loads current state
+        lifecycle_manager = StrategyLifecycleManager(pool_manager)
+        report = lifecycle_manager.run_review_cycle()
+        print(f"Lifecycle Review Complete.")
+        print(f"  Retired: {len(report.retired)}")
+        print(f"  Promoted Candidates: {len(report.promoted_candidates)}")
+        return
+
 
     # Determine symbols
     symbols = None

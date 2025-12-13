@@ -134,6 +134,24 @@ class ShadowPoolManager:
         # Load strategies on init
         self.reload_strategies()
 
+    def remove_strategy(self, strategy_id: str) -> bool:
+        """
+        Remove a strategy from memory.
+
+        Args:
+            strategy_id: ID of strategy to remove
+
+        Returns:
+            True if removed, False if not found
+        """
+        if strategy_id in self.strategies:
+            del self.strategies[strategy_id]
+            if strategy_id in self.strategy_metadata:
+                del self.strategy_metadata[strategy_id]
+            logger.info(f"Removed strategy {strategy_id} from memory")
+            return True
+        return False
+
     def reload_strategies(self) -> int:
         """
         Reload strategies from shadow pool directory.
