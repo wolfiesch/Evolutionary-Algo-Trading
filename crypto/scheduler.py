@@ -208,9 +208,15 @@ class EvolutionScheduler:
                 logger.info(f"Saved best strategy: {record.name} (Score: {record.final_score:.3f})")
 
                 # Try to promote to shadow
+                # Phase 1 testing: Use more lenient thresholds to get strategies
+                # into shadow pool for observation. Production would use stricter defaults.
                 handoff_config = HandoffConfig(
                     strategy_store_dir=self.strategy_store_dir,
                     shadow_pool_dir=self.shadow_pool_dir,
+                    # Phase 1 relaxed thresholds (defaults: sharpe=0.5, regime=4, trades=30)
+                    min_sharpe=0.3,
+                    min_regime_passes=0,  # Disable regime testing for now (not enough data variety)
+                    min_trade_count=10,
                 )
 
                 promoted = promote_best_from_evolution(
@@ -338,8 +344,8 @@ def main():
     parser.add_argument(
         "--symbol",
         type=str,
-        default="SOLUSDT",
-        help="Symbol to evolve (default: SOLUSDT)",
+        default="BTCUSDT",
+        help="Symbol to evolve (default: BTCUSDT)",
     )
     parser.add_argument(
         "--generations",
