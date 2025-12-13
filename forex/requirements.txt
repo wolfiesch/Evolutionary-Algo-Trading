@@ -1,0 +1,21 @@
+# Core
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# OANDA API
+oandapyV20>=0.7.2
+
+# Data
+pandas>=2.1.0
+numpy>=1.26.0
+sqlite-utils>=3.35.0
+
+# Logging
+structlog>=23.2.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+pytest-mock>=3.12.0
