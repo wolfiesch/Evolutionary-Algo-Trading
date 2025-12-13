@@ -406,7 +406,7 @@ def run_evolution(
 
     # Load benchmark candles (BTC)
     logger.info("Loading benchmark candles (BTCUSDT)...")
-    btc_candles = repo.get_latest("BTCUSDT", limit=20000)  # ~14 days of 1-min data
+    btc_candles = repo.get_latest("BTCUSDT", limit=35000)  # ~24 days of 1-min data
     if len(btc_candles) < 80:
         # [*TO-DO*] - Increase to 200+ when more data is available
         logger.error(f"Insufficient BTC data: {len(btc_candles)} candles (need 80+)")
@@ -419,7 +419,7 @@ def run_evolution(
         candles_dict: dict[str, pd.DataFrame] = {}
         for sym in portfolio_symbols:
             logger.info(f"Loading candles for {sym}...")
-            sym_candles = repo.get_latest(sym, limit=20000)  # ~14 days of 1-min data
+            sym_candles = repo.get_latest(sym, limit=35000)  # ~24 days of 1-min data
             if len(sym_candles) < 80:
                 logger.warning(f"Insufficient data for {sym}: {len(sym_candles)} candles (need 80+), skipping")
                 continue
@@ -435,7 +435,7 @@ def run_evolution(
     else:
         # Single symbol mode
         logger.info(f"Loading candles for {symbol}...")
-        symbol_candles = repo.get_latest(symbol, limit=20000)  # ~14 days of 1-min data
+        symbol_candles = repo.get_latest(symbol, limit=35000)  # ~24 days of 1-min data
         if len(symbol_candles) < 80:
             # [*TO-DO*] - Increase to 200+ when more data is available
             logger.error(f"Insufficient data for {symbol}: {len(symbol_candles)} candles (need 80+)")
@@ -697,12 +697,12 @@ def run_full_evolution(
 
     # Load candles
     logger.info("Loading candles...")
-    btc_candles = repo.get_latest("BTCUSDT", limit=20000)  # ~14 days of 1-min data
+    btc_candles = repo.get_latest("BTCUSDT", limit=35000)  # ~24 days of 1-min data
     if len(btc_candles) < 80:
         logger.error(f"Insufficient BTC data: {len(btc_candles)} candles (need 80+)")
         return
 
-    symbol_candles = repo.get_latest(symbol, limit=20000)  # ~14 days of 1-min data
+    symbol_candles = repo.get_latest(symbol, limit=35000)  # ~24 days of 1-min data
     if len(symbol_candles) < 80:
         logger.error(f"Insufficient {symbol} data: {len(symbol_candles)} candles (need 80+)")
         return
