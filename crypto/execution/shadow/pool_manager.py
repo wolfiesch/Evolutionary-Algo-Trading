@@ -4,12 +4,13 @@ Multi-strategy shadow pool manager.
 Manages multiple strategies from the shadow pool simultaneously,
 tracking performance per strategy and handling position limits.
 """
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 import pandas as pd
 
 from .trader import ShadowTrader, TradeLog
@@ -18,6 +19,9 @@ from engine.strategy_logic.parser import Strategy, Signal, GeneExpressionParser
 from engine.gene_pool import market_filter
 from shared.engine.gene_pool import volatility
 from config import settings
+
+if TYPE_CHECKING:
+    from notifications.discord import DiscordNotifier
 
 logger = logging.getLogger("trades")
 error_logger = logging.getLogger("errors")
@@ -98,10 +102,12 @@ class ShadowPoolManager:
         shadow_pool_dir: Optional[Path] = None,
         initial_equity: float = 10_000.0,
         log_path: Optional[Path] = None,
+        notifier: Optional["DiscordNotifier"] = None,
     ):
         self.shadow_pool_dir = shadow_pool_dir or (settings.logs_dir / "shadow_pool")
         self.log_path = log_path or (settings.logs_dir / "shadow_trades.jsonl")
         self.parser = GeneExpressionParser()
+        self.notifier = notifier
 
         # State
         self.state = ShadowPoolState(
@@ -226,6 +232,15 @@ class ShadowPoolManager:
             logger.warning(f"KILL SWITCH: >5% drawdown in 1 hour ({hourly_dd:.1%}), pausing for 1 hour")
             self.trading_paused = True
             self.pause_until = now.replace(hour=now.hour + 1, minute=0, second=0)
+            # Send Discord notification
+            if self.notifier:
+                asyncio.create_task(self.notifier.send_kill_switch(
+                    trigger=f">5% drawdown in 1 hour ({hourly_dd:.1%})",
+                    current_equity=self.state.paper_equity,
+                    initial_equity=self.state.initial_equity,
+                    drawdown_pct=hourly_dd * 100,
+                    pause_duration="1 hour",
+                ))
             return False
 
         # Check total drawdown
@@ -236,6 +251,15 @@ class ShadowPoolManager:
             logger.critical(f"KILL SWITCH: >15% total drawdown ({total_dd:.1%}), FULL STOP")
             self.trading_paused = True
             self.pause_until = None  # Manual resume required
+            # Send Discord notification
+            if self.notifier:
+                asyncio.create_task(self.notifier.send_kill_switch(
+                    trigger=f">15% total drawdown ({total_dd:.1%}) - FULL STOP",
+                    current_equity=self.state.paper_equity,
+                    initial_equity=self.state.initial_equity,
+                    drawdown_pct=total_dd * 100,
+                    pause_duration=None,  # Manual restart required
+                ))
             return False
 
         # >10% in 24 hours would need tracking (simplified here)
@@ -522,6 +546,9 @@ class ShadowPoolManager:
 
         # Log trade with slippage data
         strategy = self.strategies.get(strategy_id)
+        # Capture entry time before removing position
+        entry_time_ms = position.entry_time
+
         trade_log = TradeLog(
             timestamp=int(datetime.utcnow().timestamp() * 1000),
             strategy_id=strategy_id,
@@ -542,15 +569,15 @@ class ShadowPoolManager:
             candle_close=candle_ohlc[3] if candle_ohlc else None,
             implied_slippage_pct=implied_slippage * 100,  # As percentage
         )
-        self._log_trade(trade_log)
+        self._log_trade(trade_log, entry_time_ms=entry_time_ms)
 
         # Remove position
         del self.state.positions[position_key]
 
         return True
 
-    def _log_trade(self, trade: TradeLog) -> None:
-        """Append trade to log file."""
+    def _log_trade(self, trade: TradeLog, entry_time_ms: Optional[int] = None) -> None:
+        """Append trade to log file and send Discord notification."""
         with open(self.log_path, "a") as f:
             f.write(trade.to_json() + "\n")
 
@@ -564,6 +591,13 @@ class ShadowPoolManager:
                 f"[{trade.strategy_id}] {trade.signal} {trade.coin} @ {trade.simulated_fill:.4f} "
                 f"(size: ${trade.position_size_usdt:.2f})"
             )
+
+        # Send Discord notification
+        if self.notifier:
+            if "ENTRY" in trade.signal:
+                asyncio.create_task(self.notifier.send_trade_entry(trade))
+            elif "EXIT" in trade.signal:
+                asyncio.create_task(self.notifier.send_trade_exit(trade, entry_time_ms))
 
     def get_stats(self) -> dict:
         """Get overall and per-strategy statistics."""

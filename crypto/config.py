@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     initial_equity: float = Field(default=10000.0, description="Starting paper equity")
     friction_per_side: float = Field(default=0.0025, description="0.25% per trade side")
 
+    # Discord Notifications
+    discord_webhook_url: str = Field(default="", description="Discord webhook URL for notifications")
+
+    @property
+    def discord_enabled(self) -> bool:
+        """Check if Discord notifications are enabled."""
+        return bool(self.discord_webhook_url)
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

@@ -5,6 +5,7 @@ import signal as sig
 import sys
 import pandas as pd
 from pathlib import Path
+from typing import Optional
 
 from config import settings
 from logs import setup_logging
@@ -16,6 +17,7 @@ from execution.shadow.trader import ShadowTrader
 from execution.shadow.pool_manager import ShadowPoolManager
 from execution.shadow.hot_reload import check_reload_signal
 from engine.strategy_logic.parser import GeneExpressionParser
+from notifications import DiscordNotifier, NotificationScheduler
 
 
 # Hardcoded test strategy (Phase 1 / fallback)
@@ -62,14 +64,21 @@ class CryptoAlphaSystem:
         # Mode selection
         self.use_shadow_pool = use_shadow_pool
 
+        # Initialize Discord notifications
+        self.notifier: Optional[DiscordNotifier] = None
+        self.scheduler: Optional[NotificationScheduler] = None
+        if settings.discord_enabled:
+            self.notifier = DiscordNotifier(settings.discord_webhook_url)
+            self.trade_logger.info("Discord notifications enabled")
+
         # Initialize components
         self.repository = CandleRepository(settings.sqlite_path)
         self.validator = CandleValidator()
         self.parser = GeneExpressionParser()
 
         if use_shadow_pool:
-            # Phase 3: Multi-strategy shadow pool
-            self.pool_manager = ShadowPoolManager()
+            # Phase 3: Multi-strategy shadow pool (pass notifier)
+            self.pool_manager = ShadowPoolManager(notifier=self.notifier)
             self.trader = None
             self.strategy = None
             self._symbols = symbols or PHASE3_SYMBOLS
@@ -93,6 +102,7 @@ class CryptoAlphaSystem:
 
     async def on_connection_state_change(self, new_state: ConnectionState) -> None:
         """Handle connection state changes."""
+        old_state = self._connection_state
         self._connection_state = new_state
 
         if new_state == ConnectionState.READY:
@@ -101,6 +111,13 @@ class CryptoAlphaSystem:
         else:
             self._trading_paused = True
             self.trade_logger.info(f"Trading PAUSED - connection state: {new_state.value}")
+
+        # Send Discord alert on critical state changes
+        if self.notifier and new_state == ConnectionState.DISCONNECTED and old_state != ConnectionState.DISCONNECTED:
+            await self.notifier.send_connection_alert(
+                state="DISCONNECTED",
+                details="WebSocket connection lost. Attempting to reconnect...",
+            )
 
     async def on_candle(self, candle: Candle) -> None:
         """Callback for each new candle from WebSocket."""
@@ -210,6 +227,18 @@ class CryptoAlphaSystem:
             self.trade_logger.info(f"Entry: {self.strategy.entry_long}")
             self.trade_logger.info(f"Exit: {self.strategy.exit_long}")
 
+        # Start notification scheduler if enabled
+        if self.notifier and self.use_shadow_pool:
+            self.scheduler = NotificationScheduler(
+                notifier=self.notifier,
+                get_stats=self.pool_manager.get_stats,
+            )
+            await self.scheduler.start()
+
+            # Send startup notification
+            startup_stats = self.pool_manager.get_stats()
+            await self.notifier.send_startup(startup_stats)
+
         # Create WebSocket client
         client = BybitWebSocketClient(
             symbols=self._symbols,
@@ -252,6 +281,26 @@ class CryptoAlphaSystem:
         # Run WebSocket client
         self.trade_logger.info(f"Connecting to Bybit WebSocket...")
         await client.run()
+
+        # Cleanup after WebSocket stops (on shutdown)
+        await self._cleanup()
+
+    async def _cleanup(self) -> None:
+        """Clean up resources on shutdown."""
+        # Stop notification scheduler
+        if self.scheduler:
+            await self.scheduler.stop()
+
+        # Send shutdown notification with final stats
+        if self.notifier:
+            final_stats = None
+            if self.use_shadow_pool and self.pool_manager:
+                final_stats = self.pool_manager.get_stats()
+            elif self.trader:
+                final_stats = self.trader.get_stats()
+
+            await self.notifier.send_shutdown(final_stats)
+            await self.notifier.close()
 
 
 async def main():
