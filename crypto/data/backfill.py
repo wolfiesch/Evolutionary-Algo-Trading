@@ -14,6 +14,9 @@ Usage:
     # Backfill specific number of days
     python backfill.py --days 7
 
+    # Backfill specific date range (YYYY-MM-DD format)
+    python backfill.py --start-date 2024-02-01 --end-date 2024-02-15
+
     # Specify database path
     python backfill.py --db data/candles.db
 
@@ -200,7 +203,8 @@ def backfill_symbol(
 
 def run_backfill(
     symbols: list[str],
-    days: int,
+    start_time: datetime,
+    end_time: datetime,
     db_path: Path,
 ):
     """
@@ -208,26 +212,29 @@ def run_backfill(
 
     Args:
         symbols: List of trading pair symbols
-        days: Number of days to backfill
+        start_time: Start datetime (UTC)
+        end_time: End datetime (UTC)
         db_path: Path to SQLite database
     """
     logger.info("=" * 60)
     logger.info("BYBIT HISTORICAL DATA BACKFILL")
     logger.info("=" * 60)
     logger.info(f"Symbols: {', '.join(symbols)}")
-    logger.info(f"Days: {days}")
+    logger.info(f"Start: {start_time}")
+    logger.info(f"End: {end_time}")
     logger.info(f"Database: {db_path}")
     logger.info("=" * 60)
 
-    # Calculate time range
-    end_time = datetime.utcnow()
-    start_time = end_time - timedelta(days=days)
-
+    # Convert to timestamps
     end_ts = int(end_time.timestamp() * 1000)
     start_ts = int(start_time.timestamp() * 1000)
 
+    # Calculate expected candles
+    time_diff = end_time - start_time
+    expected_candles = int(time_diff.total_seconds() / 60)
+
     logger.info(f"Time range: {start_time} to {end_time}")
-    logger.info(f"Expected candles per symbol: ~{days * 24 * 60}")
+    logger.info(f"Expected candles per symbol: ~{expected_candles}")
 
     # Initialize repository
     repo = CandleRepository(db_path)
@@ -276,7 +283,19 @@ def main():
         "--days",
         type=int,
         default=30,
-        help="Number of days to backfill (default: 30)"
+        help="Number of days to backfill (default: 30, ignored if --start-date/--end-date provided)"
+    )
+    parser.add_argument(
+        "--start-date",
+        type=str,
+        default=None,
+        help="Start date in YYYY-MM-DD format (UTC)"
+    )
+    parser.add_argument(
+        "--end-date",
+        type=str,
+        default=None,
+        help="End date in YYYY-MM-DD format (UTC)"
     )
     parser.add_argument(
         "--db",
@@ -294,9 +313,38 @@ def main():
     else:
         db_path = Path(__file__).parent / "candles.db"
 
+    # Calculate time range
+    if args.start_date and args.end_date:
+        # Use specific date range
+        try:
+            start_time = datetime.strptime(args.start_date, "%Y-%m-%d")
+            end_time = datetime.strptime(args.end_date, "%Y-%m-%d")
+
+            # End date should be end of day
+            end_time = end_time.replace(hour=23, minute=59, second=59)
+
+            if start_time >= end_time:
+                logger.error("Start date must be before end date")
+                sys.exit(1)
+
+            logger.info(f"Using date range: {args.start_date} to {args.end_date}")
+        except ValueError as e:
+            logger.error(f"Invalid date format: {e}")
+            logger.error("Use YYYY-MM-DD format (e.g., 2024-02-01)")
+            sys.exit(1)
+    elif args.start_date or args.end_date:
+        logger.error("Both --start-date and --end-date must be provided together")
+        sys.exit(1)
+    else:
+        # Use days parameter (default behavior)
+        end_time = datetime.utcnow()
+        start_time = end_time - timedelta(days=args.days)
+        logger.info(f"Using last {args.days} days")
+
     run_backfill(
         symbols=symbols,
-        days=args.days,
+        start_time=start_time,
+        end_time=end_time,
         db_path=db_path,
     )
 
