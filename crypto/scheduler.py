@@ -18,6 +18,7 @@ Usage:
     python scheduler.py --dry-run
 """
 import argparse
+import asyncio
 import logging
 import os
 import signal
@@ -32,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from crypto.config import settings
 from crypto.evolve import run_full_evolution
+from crypto.notifications import DiscordNotifier
 
 from shared.evolution.persistence import (
     StrategyStore,
@@ -110,6 +112,68 @@ class EvolutionScheduler:
         # Run history
         self.history_path = settings.logs_dir / "scheduler_history.jsonl"
 
+        # Discord notifications
+        self.notifier: Optional[DiscordNotifier] = None
+        if settings.discord_enabled:
+            self.notifier = DiscordNotifier(settings.discord_webhook_url)
+            logger.info("Discord notifications enabled for evolution scheduler")
+
+    def _send_discord(self, embed: dict) -> None:
+        """Send a Discord notification synchronously."""
+        if not self.notifier:
+            return
+        try:
+            asyncio.run(self.notifier._send([embed]))
+        except Exception as e:
+            logger.warning(f"Failed to send Discord notification: {e}")
+
+    def _notify_evolution_start(self, symbol: str, generations: int, population: int) -> None:
+        """Send notification when evolution starts."""
+        self._send_discord({
+            "title": "🧬 Evolution Started",
+            "color": 0x0099FF,  # Blue
+            "fields": [
+                {"name": "Symbol", "value": symbol, "inline": True},
+                {"name": "Generations", "value": str(generations), "inline": True},
+                {"name": "Population", "value": str(population), "inline": True},
+            ],
+            "timestamp": datetime.utcnow().isoformat(),
+        })
+
+    def _notify_evolution_complete(
+        self,
+        success: bool,
+        best_name: Optional[str] = None,
+        best_score: Optional[float] = None,
+        duration_min: float = 0,
+        promoted: bool = False,
+    ) -> None:
+        """Send notification when evolution completes."""
+        if success and best_name:
+            color = 0x00FF00 if promoted else 0xFFFF00  # Green if promoted, yellow otherwise
+            title = "✅ Evolution Complete" if promoted else "⚠️ Evolution Complete (Not Promoted)"
+            fields = [
+                {"name": "Best Strategy", "value": best_name, "inline": True},
+                {"name": "Score", "value": f"{best_score:.3f}", "inline": True},
+                {"name": "Duration", "value": f"{duration_min:.1f} min", "inline": True},
+            ]
+            if promoted:
+                fields.append({"name": "Status", "value": "🚀 Promoted to Shadow Pool", "inline": False})
+        else:
+            color = 0xFF0000  # Red
+            title = "❌ Evolution Failed"
+            fields = [
+                {"name": "Duration", "value": f"{duration_min:.1f} min", "inline": True},
+                {"name": "Result", "value": "No viable strategy found", "inline": True},
+            ]
+
+        self._send_discord({
+            "title": title,
+            "color": color,
+            "fields": fields,
+            "timestamp": datetime.utcnow().isoformat(),
+        })
+
     def _calculate_next_run(self) -> datetime:
         """Calculate the next scheduled run time."""
         now = datetime.utcnow()
@@ -172,6 +236,9 @@ class EvolutionScheduler:
         logger.info(f"SCHEDULED EVOLUTION RUN #{self._run_count}")
         logger.info(f"Time: {datetime.utcnow().isoformat()}")
         logger.info("=" * 60)
+
+        # Send start notification
+        self._notify_evolution_start(symbol, generations, population_size)
 
         try:
             # Run evolution
@@ -237,12 +304,27 @@ class EvolutionScheduler:
                 self._log_run(True, f"Best score: {record.final_score:.3f}", duration)
                 self._last_run = datetime.utcnow()
 
+                # Send completion notification
+                self._notify_evolution_complete(
+                    success=True,
+                    best_name=record.name,
+                    best_score=record.final_score,
+                    duration_min=duration / 60,
+                    promoted=bool(promoted),
+                )
+
                 return True
 
             else:
                 duration = time.time() - start_time
                 self._log_run(False, "No viable strategy found", duration)
                 self._last_run = datetime.utcnow()
+
+                # Send failure notification
+                self._notify_evolution_complete(
+                    success=False,
+                    duration_min=duration / 60,
+                )
 
                 return False
 
@@ -251,6 +333,17 @@ class EvolutionScheduler:
             logger.error(f"Evolution run failed: {e}")
             self._log_run(False, f"Error: {str(e)}", duration)
             self._last_run = datetime.utcnow()
+
+            # Send error notification
+            self._send_discord({
+                "title": "💥 Evolution Error",
+                "color": 0xFF0000,
+                "description": str(e)[:500],
+                "fields": [
+                    {"name": "Duration", "value": f"{duration/60:.1f} min", "inline": True},
+                ],
+                "timestamp": datetime.utcnow().isoformat(),
+            })
 
             return False
 
