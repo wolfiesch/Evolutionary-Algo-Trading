@@ -297,8 +297,67 @@ def create_default_client(log_dir: Optional[Path] = None) -> LLMClient:
     if gemini_key:
         config = LLMConfig(
             provider=LLMProvider.GEMINI,
-            model="gemini-2.5-flash",  # Gemini 2.5 Flash - fast & efficient
+            model="gemini-2.0-flash",  # Gemini 2.0 Flash - reliable JSON output
             api_key=gemini_key,
+            log_dir=log_dir,
+        )
+        return GeminiClient(config)
+
+    raise ValueError(
+        "No LLM API key found. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY environment variable."
+    )
+
+
+def create_analysis_client(log_dir: Optional[Path] = None) -> LLMClient:
+    """
+    Create a capable LLM client for strategy analysis.
+
+    Uses Sonnet (Anthropic) or GPT-4o (OpenAI) for reasoning about
+    why strategies work. Sonnet provides good analysis at reasonable cost.
+
+    Priority: Anthropic Sonnet > OpenAI GPT-4o > Gemini Pro
+
+    Args:
+        log_dir: Optional directory for logging interactions
+
+    Returns:
+        LLMClient instance configured for analysis
+    """
+    # Try Anthropic Sonnet first (good reasoning, reasonable cost)
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+    if anthropic_key:
+        config = LLMConfig(
+            provider=LLMProvider.ANTHROPIC,
+            model="claude-sonnet-4-20250514",  # Sonnet 4 - good reasoning, cost-effective
+            api_key=anthropic_key,
+            max_tokens=2000,  # Analysis needs more tokens
+            temperature=0.3,  # Lower temperature for analytical tasks
+            log_dir=log_dir,
+        )
+        return AnthropicClient(config)
+
+    # Try OpenAI GPT-4o
+    openai_key = os.environ.get("OPENAI_API_KEY")
+    if openai_key:
+        config = LLMConfig(
+            provider=LLMProvider.OPENAI,
+            model="gpt-4o",  # GPT-4o - strong reasoning
+            api_key=openai_key,
+            max_tokens=2000,
+            temperature=0.3,
+            log_dir=log_dir,
+        )
+        return OpenAIClient(config)
+
+    # Try Gemini Pro as fallback
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    if gemini_key:
+        config = LLMConfig(
+            provider=LLMProvider.GEMINI,
+            model="gemini-2.5-pro",  # Gemini Pro - reasoning capable
+            api_key=gemini_key,
+            max_tokens=2000,
+            temperature=0.3,
             log_dir=log_dir,
         )
         return GeminiClient(config)

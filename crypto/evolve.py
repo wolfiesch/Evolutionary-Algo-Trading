@@ -10,6 +10,7 @@ Usage:
     python evolve.py --generations=3 --portfolio                      # Multi-symbol portfolio
     python evolve.py --generations=3 --symbol=SOLUSDT --walkforward  # Walk-forward validation
     python evolve.py --generations=10 --full                          # Phase 2D full evolution engine
+    python evolve.py --generations=10 --full --analyze                # + Opus analysis of winners
 
 Requirements:
     - OPENAI_API_KEY or ANTHROPIC_API_KEY environment variable
@@ -56,6 +57,9 @@ from shared.evolution.mutator import (
     EvolutionConfig,
     EvolutionEngine,
     CrossoverOperator,
+    # Strategy Analyzer (Opus-powered)
+    StrategyAnalyzer,
+    analyze_evolution_winners,
 )
 
 # Configure logging with unbuffered handlers for real-time visibility
@@ -362,6 +366,7 @@ def run_evolution(
     use_portfolio: bool = False,
     use_walkforward: bool = False,
     portfolio_symbols: list[str] = None,
+    market_filter_override: str = None,
 ):
     """
     Run the evolution loop.
@@ -511,8 +516,8 @@ def run_evolution(
         logger.error(f"LLM initialization failed: {e}")
         return
 
-    # Initialize generator with self-referential market filter
-    market_filter = get_market_filter_name(symbol)
+    # Initialize generator with self-referential market filter (or override)
+    market_filter = market_filter_override or get_market_filter_name(symbol)
     logger.info(f"Using market filter: {market_filter}")
 
     generator = StrategyGenerator(
@@ -676,6 +681,7 @@ def run_full_evolution(
     progress_file: Path = None,
     custom_themes: list[str] = None,
     seed_strategy_path: Path = None,
+    market_filter_override: str = None,
 ):
     """
     Run Phase 2D full evolution with the EvolutionEngine.
@@ -774,8 +780,8 @@ def run_full_evolution(
         logger.error(f"LLM initialization failed: {e}")
         return
 
-    # Initialize generator and crossover with self-referential market filter
-    market_filter = get_market_filter_name(symbol)
+    # Initialize generator and crossover with self-referential market filter (or override)
+    market_filter = market_filter_override or get_market_filter_name(symbol)
     logger.info(f"Using market filter: {market_filter}")
 
     generator = StrategyGenerator(
@@ -981,17 +987,35 @@ def main():
         default=None,
         help="Path to JSON file with seed strategy for genetic transplantation"
     )
+    arg_parser.add_argument(
+        "--analyze",
+        action="store_true",
+        help="Use Opus to analyze top strategies after evolution (explains WHY they work)"
+    )
+    arg_parser.add_argument(
+        "--analyze-top",
+        type=int,
+        default=3,
+        help="Number of top strategies to analyze (default: 3)"
+    )
+    arg_parser.add_argument(
+        "--market-filter",
+        type=str,
+        choices=["btc_trend", "asset_trend"],
+        help="Override market filter (default: btc_trend for altcoins, asset_trend for BTC)"
+    )
 
     args = arg_parser.parse_args()
 
     db_path = Path(args.db) if args.db else None
 
     # Phase 2D: Full evolution engine
+    result = None
     if args.full:
         checkpoint_dir = Path(args.checkpoint_dir) if args.checkpoint_dir else None
         custom_themes = MEAN_REVERSION_THEMES if args.mean_reversion else None
         seed_path = Path(args.seed) if args.seed else None
-        run_full_evolution(
+        result = run_full_evolution(
             symbol=args.symbol,
             generations=args.generations,
             population_size=args.population,
@@ -1000,6 +1024,7 @@ def main():
             resume_from=args.resume,
             custom_themes=custom_themes,
             seed_strategy_path=seed_path,
+            market_filter_override=args.market_filter,
         )
     else:
         # Phase 2A/2B/2C: Simple evolution loop
@@ -1013,7 +1038,39 @@ def main():
             use_portfolio=args.portfolio,
             use_walkforward=args.walkforward,
             portfolio_symbols=portfolio_symbols,
+            market_filter_override=args.market_filter,
         )
+
+    # Opus-powered strategy analysis
+    if args.analyze and result and result.final_population:
+        logger.info(f"\n{'=' * 60}")
+        logger.info("OPUS STRATEGY ANALYSIS")
+        logger.info("=" * 60)
+        logger.info(f"Analyzing top {args.analyze_top} strategies with Opus...\n")
+
+        try:
+            analyses = analyze_evolution_winners(
+                result,
+                top_n=args.analyze_top,
+                log_dir=Path("crypto/logs"),
+            )
+
+            for analysis in analyses:
+                print(analysis)
+
+            # Save analyses to file
+            analysis_file = Path("crypto/logs") / f"analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+            with open(analysis_file, "w") as f:
+                f.write(f"# Strategy Analysis Report\n")
+                f.write(f"Generated: {datetime.now().strftime('%m/%d/%Y %I:%M %p')}\n\n")
+                for analysis in analyses:
+                    f.write(str(analysis))
+                    f.write("\n\n")
+            logger.info(f"Analysis saved to: {analysis_file}")
+
+        except Exception as e:
+            logger.error(f"Strategy analysis failed: {e}")
+            logger.info("Evolution completed successfully, but Opus analysis encountered an error.")
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ from shared.evolution.mutator.llm_client import (
     AnthropicClient,
     create_llm_client,
     create_default_client,
+    create_analysis_client,
 )
 from shared.evolution.mutator.generator import (
     GeneratedStrategy,
@@ -35,6 +36,11 @@ from shared.evolution.mutator.evolution import (
     EvolutionEngine,
     ProgressCallback,
 )
+from shared.evolution.mutator.analyzer import (
+    StrategyAnalysis,
+    StrategyAnalyzer,
+    analyze_evolution_winners,
+)
 
 __all__ = [
     # LLM Client
@@ -45,6 +51,7 @@ __all__ = [
     "AnthropicClient",
     "create_llm_client",
     "create_default_client",
+    "create_analysis_client",
     # Generator
     "GeneratedStrategy",
     "StrategyGenerator",
@@ -69,4 +76,8 @@ __all__ = [
     "EvolutionResult",
     "EvolutionEngine",
     "ProgressCallback",
+    # Strategy Analyzer (Opus-powered)
+    "StrategyAnalysis",
+    "StrategyAnalyzer",
+    "analyze_evolution_winners",
 ]

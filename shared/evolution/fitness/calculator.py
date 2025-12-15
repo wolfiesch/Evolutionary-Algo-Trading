@@ -16,7 +16,7 @@ from shared.evolution.fitness.regime_classifier import (
 
 
 # Disqualification thresholds
-MIN_TRADES = 15              # Lowered for bootstrapping on limited data (was 30, originally 50)
+MIN_TRADES = 10              # Further lowered to escape stuck evolutions (was 15, 30, originally 50)
 MIN_TRADES_PER_REGIME = 2    # Phase 2B: Minimum trades per regime
 MAX_DRAWDOWN_HARD = 0.25     # 25% max drawdown
 MIN_WIN_RATE = 0.05          # 5% minimum win rate (very relaxed for Phase 2A testing)
