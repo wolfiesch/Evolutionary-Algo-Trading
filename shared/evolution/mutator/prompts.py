@@ -8,14 +8,17 @@ Asset-agnostic prompts with configurable market filter names.
 STRATEGY_GENERATION_PROMPT = """Generate trading strategy JSON using ONLY these primitives:
 
 PRIMITIVES (use integer params: 5,9,14,20,21,50,60):
-- {market_filter_name}(w) -> ±1.0 (MUST use >= 0 in entry)
-- ema_trend(fast,slow) -> ±1.0
-- price_position(p) -> ±3.0
-- norm_rsi(p) -> -1 to +1
-- bb_position(p,std) -> -1 to +1
-- volume_intensity(p,thresh) -> 0 or 1
-- vwap_distance(p) -> ±3.0
-- atr_regime(p) -> ±1.0
+BINARY (use == 1.0 or == -1.0, NOT > or <):
+- {market_filter_name}(w) -> exactly -1.0 or +1.0 (MUST use >= 0 in entry)
+- ema_trend(fast,slow) -> exactly -1.0 or +1.0 (use == 1.0 for uptrend, == -1.0 for downtrend)
+- volume_intensity(p,thresh) -> exactly 0 or 1 (use == 1 for high volume)
+
+CONTINUOUS (use > or < with thresholds):
+- norm_rsi(p) -> -1.0 to +1.0 (e.g., < -0.3 for oversold)
+- bb_position(p,std) -> -1.0 to +1.0 (e.g., < -0.5 for lower band)
+- price_position(p) -> -3.0 to +3.0
+- vwap_distance(p) -> -3.0 to +3.0
+- atr_regime(p) -> -1.0 to +1.0
 
 RULES: Max 5 primitives. Use 2-3 entry conditions (4+ rarely trigger). Loose thresholds (rsi<-0.3 not -0.6).
 
@@ -26,17 +29,28 @@ Theme: {theme}
 ```
 JSON only:"""
 
-# Mutation prompt - COMPACT version
+# Mutation prompt - COMPACT version with diversity guidance
 MUTATION_PROMPT = """Mutate strategy. Current: {strategy_name}
 Entry: {entry_long}
 Exit: {exit_long}
 Stats: Sharpe={sharpe}, WinRate={win_rate}%, Trades={trade_count}
 
-If trades<5: LOOSEN thresholds or REMOVE a condition. Otherwise: tweak params or swap primitive.
-Keep {market_filter_name}() in entry. Max 5 primitives. Integer params.
+MUTATION OPTIONS (pick ONE you haven't tried):
+1. SWAP primitive: Replace norm_rsi with bb_position, or ema_trend with atr_regime
+2. CHANGE params: 14->9 or 20->21, 50->60
+3. ADJUST thresholds: -0.3->-0.2 or 0.5->0.6
+4. ADD condition to exit (if <3 conditions)
+5. REMOVE weakest entry condition (if >2 conditions)
+6. FLIP logic: change < to > or entry condition to exit
+
+If trades<10: LOOSEN thresholds significantly (-0.3->-0.1) or REMOVE a condition.
+If Sharpe>2: Try ADDING a condition or TIGHTENING thresholds for quality.
+Keep {market_filter_name}() in entry. Max 5 primitives. Integer params only.
+
+IMPORTANT: Make a DIFFERENT change than previous mutations!
 
 ```json
-{{"strategy_name":"{strategy_name}_M1","mutation_type":"param|threshold|add|remove|swap","mutation_description":"brief","entry_long":"...","exit_long":"..."}}
+{{"strategy_name":"{strategy_name}_M1","mutation_type":"param|threshold|add|remove|swap|flip","mutation_description":"specific change made","entry_long":"...","exit_long":"..."}}
 ```
 JSON only:"""
 

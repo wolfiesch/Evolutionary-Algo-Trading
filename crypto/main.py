@@ -201,6 +201,13 @@ class CryptoAlphaSystem:
 
         except Exception as e:
             self.error_logger.exception(f"Error processing candle: {e}")
+            # Send error notification (don't await - fire and forget)
+            if self.notifier:
+                asyncio.create_task(self.notifier.send_error(
+                    error=e,
+                    context="Data Pipeline",
+                    severity="error",
+                ))
 
     def _candles_to_df(self, candles: list[Candle]) -> pd.DataFrame:
         """Convert Candle objects to DataFrame."""
