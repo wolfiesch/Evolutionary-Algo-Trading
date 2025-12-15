@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 import pandas as pd
 
-from shared.engine.gene_pool import trend, mean_reversion, volume, volatility
+from shared.engine.gene_pool import trend, mean_reversion, volume, volatility, risk
 from engine.gene_pool import market_filter
 
 
@@ -29,15 +29,26 @@ class Strategy:
 
 # Allowed primitives (whitelist for security)
 PRIMITIVES = {
+    # Trend
     "ema_trend": trend.ema_trend,
     "price_position": trend.price_position,
+    # Mean reversion
     "norm_rsi": mean_reversion.norm_rsi,
     "bb_position": mean_reversion.bb_position,
     "bb_width_percentile": mean_reversion.bb_width_percentile,
+    # Volume
     "volume_intensity": volume.volume_intensity,
     "vwap_distance": volume.vwap_distance,
+    # Volatility
     "atr_regime": volatility.atr_regime,
     "atr_percentile": volatility.atr_percentile,
+    # Risk management
+    "volatility_spike": risk.volatility_spike,       # Detect sudden volatility increases
+    "trend_strength": risk.trend_strength,           # ADX-based trend strength
+    "atr_stop_distance": risk.atr_stop_distance,     # ATR-based stop distance %
+    "recent_range_position": risk.recent_range_position,  # Position in recent range
+    "momentum_divergence": risk.momentum_divergence,      # Price/momentum divergence
+    "volatility_contraction": risk.volatility_contraction,  # Volatility squeeze detection
     # Market filters
     "btc_trend": market_filter.btc_trend,       # Cross-asset filter (uses BTC data)
     "sol_trend": market_filter.sol_trend,       # Self-referential for SOL

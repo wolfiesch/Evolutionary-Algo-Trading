@@ -12,6 +12,7 @@ BINARY (use == 1.0 or == -1.0, NOT > or <):
 - {market_filter_name}(w) -> exactly -1.0 or +1.0 (MUST use >= 0 in entry)
 - ema_trend(fast,slow) -> exactly -1.0 or +1.0 (use == 1.0 for uptrend, == -1.0 for downtrend)
 - volume_intensity(p,thresh) -> exactly 0 or 1 (use == 1 for high volume)
+- volatility_spike(p,mult) -> 0 (safe) or 1 (spike detected, avoid entry)
 
 CONTINUOUS (use > or < with thresholds):
 - norm_rsi(p) -> -1.0 to +1.0 (e.g., < -0.3 for oversold)
@@ -19,6 +20,9 @@ CONTINUOUS (use > or < with thresholds):
 - price_position(p) -> -3.0 to +3.0
 - vwap_distance(p) -> -3.0 to +3.0
 - atr_regime(p) -> -1.0 to +1.0
+- trend_strength(p) -> 0.0 to 1.0 (ADX-based, >0.5 = strong trend)
+- recent_range_position(p) -> 0.0 to 1.0 (0=at low, 1=at high)
+- volatility_contraction(p,lookback) -> -1.0 to 1.0 (positive = squeeze)
 
 RULES: Max 5 primitives. Use 2-3 entry conditions (4+ rarely trigger). Loose thresholds (rsi<-0.3 not -0.6).
 

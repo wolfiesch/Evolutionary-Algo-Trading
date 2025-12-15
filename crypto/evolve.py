@@ -687,6 +687,7 @@ def run_full_evolution(
     create_snapshot: bool = False,
     use_snapshot: str = None,
     snapshot_dir: Path = None,
+    use_walkforward: bool = False,
 ):
     """
     Run Phase 2D full evolution with the EvolutionEngine.
@@ -710,6 +711,7 @@ def run_full_evolution(
         create_snapshot: If True, save data snapshot at run start
         use_snapshot: Snapshot ID to load data from (overrides db_path)
         snapshot_dir: Directory for snapshots (default: crypto/data/snapshots)
+        use_walkforward: If True, use walk-forward validation for fitness evaluation
     """
     if db_path is None:
         # Use main database (settings.sqlite_path), fall back to cloud DB
@@ -742,6 +744,7 @@ def run_full_evolution(
         logger.info(f"Using snapshot: {use_snapshot}")
     elif create_snapshot:
         logger.info(f"Snapshot: ENABLED (will freeze data at run start)")
+    logger.info(f"Walk-forward: {'ENABLED' if use_walkforward else 'DISABLED'}")
     logger.info("=" * 60)
 
     # Initialize components
@@ -810,6 +813,18 @@ def run_full_evolution(
     backtester = MinimalBacktester(backtest_config)
     parser = GeneExpressionParser()
 
+    # Initialize walk-forward validator if enabled
+    wf_validator = None
+    if use_walkforward:
+        wf_config = WalkForwardConfig(
+            train_bars=2000,  # ~1.4 days training
+            test_bars=500,    # ~8 hours test
+            step_bars=500,    # Step by ~8 hours
+            min_windows=3,    # Need at least 3 windows
+        )
+        wf_validator = WalkForwardValidator(backtest_config, wf_config)
+        logger.info(f"Walk-forward config: train={wf_config.train_bars}, test={wf_config.test_bars}, step={wf_config.step_bars}")
+
     # Initialize LLM
     logger.info("Initializing LLM client...")
     try:
@@ -832,20 +847,45 @@ def run_full_evolution(
         market_filter_name=market_filter,
     )
 
-    # Create evaluation function
+    # Create evaluation function (supports both standard and walk-forward modes)
     def eval_strategy(generated: GeneratedStrategy) -> tuple[FitnessResult, dict]:
         try:
             strategy = parser.parse(generated.to_dict())
             evaluator = create_evaluator(strategy, parser)
 
-            results = backtester.run(
-                evaluator=evaluator,
-                candles=symbol_df,
-                benchmark_candles=btc_df,
-                symbol=symbol,
-            )
-            fitness = calculate_fitness(results)
-            return fitness, results.summary()
+            if use_walkforward and wf_validator:
+                # Walk-forward validation mode
+                wf_results = wf_validator.validate(
+                    evaluator=evaluator,
+                    candles=symbol_df,
+                    benchmark_candles=btc_df,
+                    symbol=symbol,
+                )
+                score, is_valid, reason = walk_forward_fitness(wf_results)
+                fitness = FitnessResult(
+                    sharpe_ratio=wf_results.avg_sharpe,
+                    trade_count=wf_results.aggregated.trade_count if wf_results.aggregated else 0,
+                    win_rate=wf_results.avg_win_rate,
+                    total_return=wf_results.avg_return,
+                    max_drawdown=wf_results.aggregated.max_drawdown if wf_results.aggregated else 0,
+                )
+                if not is_valid:
+                    fitness.disqualified = True
+                    fitness.disqualification_reason = reason
+                    fitness.final_score = 0.0
+                else:
+                    fitness.final_score = score
+                return fitness, wf_results.summary()
+            else:
+                # Standard backtester mode
+                results = backtester.run(
+                    evaluator=evaluator,
+                    candles=symbol_df,
+                    benchmark_candles=btc_df,
+                    symbol=symbol,
+                )
+                fitness = calculate_fitness(results)
+                return fitness, results.summary()
         except Exception as e:
             logger.error(f"Evaluation error for {generated.name}: {e}")
             return FitnessResult(
@@ -1086,6 +1126,7 @@ def main():
             create_snapshot=args.snapshot,
             use_snapshot=args.use_snapshot,
             snapshot_dir=snap_dir,
+            use_walkforward=args.walkforward,
         )
     else:
         # Phase 2A/2B/2C: Simple evolution loop

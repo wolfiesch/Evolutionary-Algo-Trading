@@ -49,7 +49,7 @@ class LLMConfig:
             model = "gpt-5-mini"  # GPT-5-mini - latest efficient model
         else:
             api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-            model = "claude-3-5-haiku-20241022"  # Haiku 3.5 - fast & cheap for JSON generation
+            model = "claude-haiku-4-5-20251001"  # Haiku 4.5 - fast & cheap for JSON generation
 
         return cls(
             provider=provider,
