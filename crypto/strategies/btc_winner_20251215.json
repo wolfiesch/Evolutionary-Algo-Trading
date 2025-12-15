@@ -1,0 +1,46 @@
+{
+  "strategy_name": "SidewaysRange_V1",
+  "discovered_date": "2025-12-15",
+  "discovered_on": "BTCUSDT",
+  "market_filter": "asset_trend",
+  "entry_long": "asset_trend(60) >= 0 AND bb_position(20, 1) < -0.5 AND norm_rsi(14) < 0.3",
+  "exit_long": "norm_rsi(14) > 0.7 OR bb_position(20,1) > 0.5",
+  "regime_breakdown": {
+    "bull_calm": {"sharpe": 8.97, "max_dd_pct": 0.8, "trades": 19, "win_rate_pct": 78.9, "return_pct": 8.1},
+    "bull_volatile": {"sharpe": 10.00, "max_dd_pct": 0.9, "trades": 12, "win_rate_pct": 83.3, "return_pct": 9.0},
+    "bear_calm": {"sharpe": 10.00, "max_dd_pct": 1.1, "trades": 23, "win_rate_pct": 69.6, "return_pct": 8.9},
+    "bear_volatile": {"sharpe": 10.00, "max_dd_pct": 1.2, "trades": 16, "win_rate_pct": 62.5, "return_pct": 8.5},
+    "sideways": {"sharpe": 3.68, "max_dd_pct": 1.0, "trades": 27, "win_rate_pct": 77.8, "return_pct": 8.1}
+  },
+  "regime_test_result": "PASS - 5/5 regimes with Sharpe > 0.5",
+  "backtest_results": {
+    "BTCUSDT": {
+      "sharpe": 3.65,
+      "max_drawdown_pct": 0.9,
+      "trade_count": 21,
+      "win_rate_pct": 71.4,
+      "total_return_pct": 8.4,
+      "data_period": "47612 candles (~33 days)"
+    },
+    "ETHUSDT": {
+      "sharpe": -2.06,
+      "max_drawdown_pct": 8.6,
+      "trade_count": 185,
+      "win_rate_pct": 54.1,
+      "total_return_pct": -6.4,
+      "note": "DOES NOT GENERALIZE - too many trades on volatile altcoin"
+    },
+    "SOLUSDT": {
+      "sharpe": -2.43,
+      "max_drawdown_pct": 9.7,
+      "trade_count": 179,
+      "win_rate_pct": 45.3,
+      "total_return_pct": -8.7,
+      "note": "DOES NOT GENERALIZE - too many trades on volatile altcoin"
+    }
+  },
+  "rationale": "Mean reversion strategy: Buy when price is oversold (lower BB, low RSI) during uptrend, exit when overbought",
+  "primitives_used": ["asset_trend", "bb_position", "norm_rsi"],
+  "status": "shadow_pool_candidate",
+  "validation_notes": "Passes all regime tests on BTC. BTC-specific - does NOT generalize to altcoins. Ready for shadow trading on BTC only."
+}

@@ -49,7 +49,7 @@ class LLMConfig:
             model = "gpt-5-mini"  # GPT-5-mini - latest efficient model
         else:
             api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-            model = "claude-haiku-4-5-20250514"  # Haiku 4.5 - fast & cheap for JSON generation
+            model = "claude-3-5-haiku-20241022"  # Haiku 3.5 - fast & cheap for JSON generation
 
         return cls(
             provider=provider,
@@ -275,7 +275,7 @@ def create_default_client(log_dir: Optional[Path] = None) -> LLMClient:
     if anthropic_key:
         config = LLMConfig(
             provider=LLMProvider.ANTHROPIC,
-            model="claude-haiku-4-5-20250514",  # Haiku 4.5 - fast & cheap for JSON generation
+            model="claude-3-5-haiku-20241022",  # Haiku 3.5 - fast & cheap for JSON generation
             api_key=anthropic_key,
             log_dir=log_dir,
         )

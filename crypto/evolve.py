@@ -38,6 +38,8 @@ from shared.evolution.backtester import (
     WalkForwardValidator,
     WalkForwardConfig,
     walk_forward_fitness,
+    DataSnapshot,
+    create_run_snapshot,
 )
 from shared.evolution.fitness import (
     calculate_fitness,
@@ -682,6 +684,9 @@ def run_full_evolution(
     custom_themes: list[str] = None,
     seed_strategy_path: Path = None,
     market_filter_override: str = None,
+    create_snapshot: bool = False,
+    use_snapshot: str = None,
+    snapshot_dir: Path = None,
 ):
     """
     Run Phase 2D full evolution with the EvolutionEngine.
@@ -701,6 +706,10 @@ def run_full_evolution(
         progress_file: Optional path to JSON file for progress polling
         custom_themes: Optional list of strategy themes to use instead of defaults
         seed_strategy_path: Path to JSON file with seed strategy for genetic transplantation
+        market_filter_override: Override market filter primitive
+        create_snapshot: If True, save data snapshot at run start
+        use_snapshot: Snapshot ID to load data from (overrides db_path)
+        snapshot_dir: Directory for snapshots (default: crypto/data/snapshots)
     """
     if db_path is None:
         # Use main database (settings.sqlite_path), fall back to cloud DB
@@ -716,6 +725,9 @@ def run_full_evolution(
     if checkpoint_dir is None:
         checkpoint_dir = log_dir / "checkpoints"
 
+    if snapshot_dir is None:
+        snapshot_dir = Path(__file__).parent / "data" / "snapshots"
+
     logger.info("=" * 60)
     logger.info("PHASE 2D: FULL EVOLUTION ENGINE")
     logger.info("=" * 60)
@@ -726,15 +738,16 @@ def run_full_evolution(
     logger.info(f"Checkpoint dir: {checkpoint_dir}")
     if resume_from:
         logger.info(f"Resuming from: {resume_from}")
+    if use_snapshot:
+        logger.info(f"Using snapshot: {use_snapshot}")
+    elif create_snapshot:
+        logger.info(f"Snapshot: ENABLED (will freeze data at run start)")
     logger.info("=" * 60)
 
     # Initialize components
     logger.info("Initializing components...")
 
-    # Repository
-    repo = CandleRepository(db_path)
-
-    # Convert to DataFrames
+    # Convert to DataFrames helper
     def candles_to_df(candles):
         return pd.DataFrame([{
             'open': c.open,
@@ -745,21 +758,47 @@ def run_full_evolution(
             'timestamp': c.timestamp,
         } for c in candles])
 
-    # Load candles
-    logger.info("Loading candles...")
-    btc_candles = repo.get_latest("BTCUSDT", limit=260000)  # ~180 days of 1-min data
-    if len(btc_candles) < 80:
-        logger.error(f"Insufficient BTC data: {len(btc_candles)} candles (need 80+)")
-        return
+    # Load data - either from snapshot or database
+    if use_snapshot:
+        # Load from existing snapshot
+        logger.info(f"Loading from snapshot: {use_snapshot}")
+        snapshot = DataSnapshot.load(use_snapshot, snapshot_dir)
+        if snapshot is None:
+            logger.error(f"Failed to load snapshot: {use_snapshot}")
+            return
+        btc_df = snapshot.benchmark
+        symbol_df = snapshot.candles
+        logger.info(f"Loaded snapshot: {len(symbol_df)} {symbol} candles, {len(btc_df)} BTC candles")
+    else:
+        # Load from database
+        repo = CandleRepository(db_path)
 
-    symbol_candles = repo.get_latest(symbol, limit=260000)  # ~180 days of 1-min data
-    if len(symbol_candles) < 80:
-        logger.error(f"Insufficient {symbol} data: {len(symbol_candles)} candles (need 80+)")
-        return
+        logger.info("Loading candles...")
+        btc_candles = repo.get_latest("BTCUSDT", limit=260000)  # ~180 days of 1-min data
+        if len(btc_candles) < 80:
+            logger.error(f"Insufficient BTC data: {len(btc_candles)} candles (need 80+)")
+            return
 
-    btc_df = candles_to_df(btc_candles)
-    symbol_df = candles_to_df(symbol_candles)
-    logger.info(f"Loaded {len(symbol_df)} {symbol} candles, {len(btc_df)} BTC candles")
+        symbol_candles = repo.get_latest(symbol, limit=260000)  # ~180 days of 1-min data
+        if len(symbol_candles) < 80:
+            logger.error(f"Insufficient {symbol} data: {len(symbol_candles)} candles (need 80+)")
+            return
+
+        btc_df = candles_to_df(btc_candles)
+        symbol_df = candles_to_df(symbol_candles)
+        logger.info(f"Loaded {len(symbol_df)} {symbol} candles, {len(btc_df)} BTC candles")
+
+        # Create snapshot if requested
+        if create_snapshot:
+            logger.info("Creating data snapshot for reproducibility...")
+            snapshot = create_run_snapshot(
+                candles_df=symbol_df,
+                benchmark_df=btc_df,
+                symbol=symbol,
+                snapshot_dir=snapshot_dir,
+            )
+            logger.info(f"Snapshot ID: {snapshot.metadata.snapshot_id}")
+            logger.info(f"  Use --use-snapshot={snapshot.metadata.snapshot_id} to reproduce this run")
 
     # Initialize backtester
     backtest_config = BacktestConfig(
@@ -1004,6 +1043,24 @@ def main():
         choices=["btc_trend", "asset_trend"],
         help="Override market filter (default: btc_trend for altcoins, asset_trend for BTC)"
     )
+    # Data snapshot arguments (T1 #2)
+    arg_parser.add_argument(
+        "--snapshot",
+        action="store_true",
+        help="Create a data snapshot at run start for reproducibility"
+    )
+    arg_parser.add_argument(
+        "--use-snapshot",
+        type=str,
+        default=None,
+        help="Use existing snapshot ID instead of loading from database"
+    )
+    arg_parser.add_argument(
+        "--snapshot-dir",
+        type=str,
+        default=None,
+        help="Directory for data snapshots (default: crypto/data/snapshots)"
+    )
 
     args = arg_parser.parse_args()
 
@@ -1015,6 +1072,7 @@ def main():
         checkpoint_dir = Path(args.checkpoint_dir) if args.checkpoint_dir else None
         custom_themes = MEAN_REVERSION_THEMES if args.mean_reversion else None
         seed_path = Path(args.seed) if args.seed else None
+        snap_dir = Path(args.snapshot_dir) if args.snapshot_dir else None
         result = run_full_evolution(
             symbol=args.symbol,
             generations=args.generations,
@@ -1025,6 +1083,9 @@ def main():
             custom_themes=custom_themes,
             seed_strategy_path=seed_path,
             market_filter_override=args.market_filter,
+            create_snapshot=args.snapshot,
+            use_snapshot=args.use_snapshot,
+            snapshot_dir=snap_dir,
         )
     else:
         # Phase 2A/2B/2C: Simple evolution loop
