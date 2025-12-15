@@ -16,12 +16,12 @@ from shared.evolution.fitness.regime_classifier import (
 
 
 # Disqualification thresholds
-# [*TO-DO*] - Increase MIN_TRADES to 30 when more data available
-MIN_TRADES = 2               # Phase 2A: Allow strategies with very few trades to be scored
+MIN_TRADES = 30              # Minimum trades for statistical significance (lowered from 50 for bootstrapping)
 MIN_TRADES_PER_REGIME = 2    # Phase 2B: Minimum trades per regime
 MAX_DRAWDOWN_HARD = 0.25     # 25% max drawdown
 MIN_WIN_RATE = 0.05          # 5% minimum win rate (very relaxed for Phase 2A testing)
 MIN_REGIME_PASSES = 4        # Need Sharpe >= 0.5 in 4/5 regimes
+MAX_SHARPE_CAP = 3.0         # Sanity cap - Sharpe > 3.0 is rare in production
 
 
 def calculate_fitness(backtest_results: BacktestResults) -> FitnessResult:
@@ -78,8 +78,10 @@ def calculate_fitness(backtest_results: BacktestResults) -> FitnessResult:
 
     # Phase 2A: Simple fitness formula
     # Sharpe ratio (can be negative) * drawdown penalty
+    # Cap Sharpe at MAX_SHARPE_CAP to prevent inflated scores from low-trade strategies
     base_sharpe = max(0.0, backtest_results.sharpe_ratio)  # Floor at 0
-    result.final_score = base_sharpe * result.drawdown_multiplier
+    capped_sharpe = min(base_sharpe, MAX_SHARPE_CAP)  # Cap at 3.0
+    result.final_score = capped_sharpe * result.drawdown_multiplier
 
     return result
 
