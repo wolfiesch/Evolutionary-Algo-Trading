@@ -2,6 +2,7 @@
 Evolution engine - main loop for LLM-driven strategy evolution.
 
 Phase 2D: Full evolution with selection, crossover, mutation, and checkpointing.
+Phase 2E: Strategy deduplication to avoid redundant evaluations.
 """
 import json
 import logging
@@ -22,6 +23,7 @@ from shared.evolution.mutator.selection import (
     elite_selection,
     select_diverse_parents,
 )
+from shared.evolution.mutator.deduplication import StrategyDeduplicator
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +48,8 @@ class EvolutionConfig:
     checkpoint_interval: int = 5  # Save checkpoint every N generations
     checkpoint_dir: Optional[str] = None  # Directory for checkpoints
     progress_file: Optional[str] = None  # Path to progress JSON file for polling
+    enable_deduplication: bool = True  # Skip evaluation of duplicate strategies
+    max_dedup_retries: int = 3  # Max retries when offspring is duplicate
 
 
 @dataclass
@@ -81,6 +85,8 @@ class EvolutionResult:
     diversity_history: list[float]
     early_stopped: bool = False
     stop_reason: Optional[str] = None
+    # Deduplication stats
+    dedup_stats: Optional[dict] = None
 
 
 # Type alias for strategy-fitness pair
@@ -142,6 +148,9 @@ class EvolutionEngine:
         self._total_evals = 0
         self._start_time = None
 
+        # Deduplication
+        self._deduplicator = StrategyDeduplicator() if config.enable_deduplication else None
+
     def _report_progress(
         self,
         strategy_name: str,
@@ -198,6 +207,40 @@ class EvolutionEngine:
                 json.dump(progress_data, f, indent=2)
         except Exception as e:
             logger.warning(f"Failed to write progress file: {e}")
+
+    def _evaluate_with_dedup(
+        self,
+        strategy: GeneratedStrategy,
+    ) -> tuple[FitnessResult, dict, bool]:
+        """
+        Evaluate a strategy, using cached result if duplicate.
+
+        Args:
+            strategy: Strategy to evaluate
+
+        Returns:
+            Tuple of (fitness, summary_dict, was_duplicate)
+        """
+        if self._deduplicator is None:
+            # Deduplication disabled
+            fitness, summary = self.evaluator(strategy)
+            return fitness, summary, False
+
+        # Check if this is a duplicate
+        if self._deduplicator.is_duplicate(strategy):
+            cached_fitness = self._deduplicator.get_cached_fitness(strategy)
+            if cached_fitness:
+                logger.info(
+                    f"  [DEDUP] {strategy.name}: Using cached result "
+                    f"(Score={cached_fitness.final_score:.3f})"
+                )
+                return cached_fitness, {}, True
+
+        # Not a duplicate - evaluate and cache
+        fitness, summary = self.evaluator(strategy)
+        self._deduplicator.register(strategy, fitness)
+
+        return fitness, summary, False
 
     def run(
         self,
@@ -306,19 +349,27 @@ class EvolutionEngine:
 
         self._population = []
         for strat in initial:
-            fitness, _ = self.evaluator(strat)
+            fitness, _, was_dup = self._evaluate_with_dedup(strat)
             self._population.append((strat, fitness))
-            # Debug: Show reason for Score=0 strategies (includes soft-fails like negative Sharpe)
-            if fitness.final_score == 0.0 and fitness.disqualification_reason:
-                logger.info(f"  {strat.name}: Score=0.000 ({fitness.disqualification_reason})")
-            else:
-                logger.info(f"  {strat.name}: Score={fitness.final_score:.3f}")
+
+            # Log result (skip detailed logging for duplicates - already logged)
+            if not was_dup:
+                if fitness.final_score <= -900 and fitness.disqualification_reason:
+                    logger.info(f"  {strat.name}: DISQUALIFIED ({fitness.disqualification_reason})")
+                elif fitness.disqualification_reason:
+                    logger.info(f"  {strat.name}: Score={fitness.final_score:.3f} ({fitness.disqualification_reason})")
+                else:
+                    logger.info(f"  {strat.name}: Score={fitness.final_score:.3f}")
 
             # Report progress
             self._report_progress(strat.name, fitness, phase="initial_population")
 
         # Sort by fitness (best first)
         self._population.sort(key=lambda x: x[1].final_score, reverse=True)
+
+        # Log deduplication stats for initial population
+        if self._deduplicator:
+            logger.info(f"  {self._deduplicator.stats.summary()}")
 
         # Initialize state
         if self._population:
@@ -352,24 +403,38 @@ class EvolutionEngine:
         remaining = self.config.population_size - len(new_population)
 
         for _ in range(remaining):
-            # Decide: mutation or crossover
-            if random.random() < self.config.mutation_rate:
-                # Mutation: select parent and mutate
-                offspring = self._mutate()
-            else:
-                # Crossover: select two parents and combine
-                offspring = self._crossover()
+            offspring = None
+            fitness = None
 
-            if offspring:
-                # Evaluate offspring
-                fitness, _ = self.evaluator(offspring)
+            # Try to generate non-duplicate offspring with retries
+            for retry in range(self.config.max_dedup_retries + 1):
+                # Decide: mutation or crossover
+                if random.random() < self.config.mutation_rate:
+                    offspring = self._mutate()
+                else:
+                    offspring = self._crossover()
+
+                if not offspring:
+                    continue
+
+                # Evaluate with deduplication
+                fitness, _, was_dup = self._evaluate_with_dedup(offspring)
+
+                # If it's a duplicate, try again (unless it's the last retry)
+                if was_dup and retry < self.config.max_dedup_retries:
+                    logger.debug(f"Retry {retry + 1}: offspring was duplicate, regenerating...")
+                    continue
+
+                break
+
+            if offspring and fitness:
                 new_population.append((offspring, fitness))
 
-                # Debug: Show reason for Score=0 (includes soft-fails like negative Sharpe)
-                if fitness.final_score == 0.0 and fitness.disqualification_reason:
-                    status = f"Score=0.000 ({fitness.disqualification_reason})"
-                elif fitness.disqualified:
-                    status = "DISQUALIFIED"
+                # Log result (duplicates already logged in _evaluate_with_dedup)
+                if fitness.final_score <= -900 and fitness.disqualification_reason:
+                    status = f"DISQUALIFIED ({fitness.disqualification_reason})"
+                elif fitness.disqualification_reason:
+                    status = f"Score={fitness.final_score:.3f} ({fitness.disqualification_reason})"
                 else:
                     status = f"Score={fitness.final_score:.3f}"
                 logger.info(f"Offspring: {offspring.name} - {status}")
@@ -381,11 +446,15 @@ class EvolutionEngine:
                 logger.warning("Operator failed, generating fresh strategy...")
                 fresh = self.generator.generate()
                 if fresh:
-                    fitness, _ = self.evaluator(fresh)
+                    fitness, _, _ = self._evaluate_with_dedup(fresh)
                     new_population.append((fresh, fitness))
 
                     # Report progress
                     self._report_progress(fresh.name, fitness, phase="evolution_fallback")
+
+        # Log dedup stats for this generation
+        if self._deduplicator:
+            logger.info(f"  {self._deduplicator.stats.summary()}")
 
         # Sort by fitness
         self._population = sorted(new_population, key=lambda x: x[1].final_score, reverse=True)
@@ -455,16 +524,25 @@ class EvolutionEngine:
         # Keep top performers
         self._population = self._population[:keep_count]
 
-        # Generate fresh strategies
+        # Generate fresh strategies (with dedup retry)
+        injected = 0
         for _ in range(inject_count):
-            fresh = self.generator.generate()
-            if fresh:
-                fitness, _ = self.evaluator(fresh)
-                self._population.append((fresh, fitness))
+            for retry in range(self.config.max_dedup_retries + 1):
+                fresh = self.generator.generate()
+                if fresh:
+                    fitness, _, was_dup = self._evaluate_with_dedup(fresh)
+
+                    # If duplicate, retry unless last attempt
+                    if was_dup and retry < self.config.max_dedup_retries:
+                        continue
+
+                    self._population.append((fresh, fitness))
+                    injected += 1
+                    break
 
         # Re-sort
         self._population.sort(key=lambda x: x[1].final_score, reverse=True)
-        logger.info(f"Injected {inject_count} fresh strategies")
+        logger.info(f"Injected {injected} fresh strategies")
 
     def _calculate_diversity(self) -> float:
         """
@@ -571,6 +649,19 @@ class EvolutionEngine:
         if self._population:
             best_strat, best_fitness = self._population[0]
 
+        # Collect dedup stats
+        dedup_stats = None
+        if self._deduplicator:
+            stats = self._deduplicator.stats
+            dedup_stats = {
+                "total_seen": stats.total_seen,
+                "duplicates_found": stats.duplicates_found,
+                "evaluations_saved": stats.evaluations_saved,
+                "unique_strategies": stats.unique_strategies,
+                "duplicate_rate_pct": stats.duplicate_rate,
+            }
+            logger.info(f"Final deduplication stats: {stats.summary()}")
+
         return EvolutionResult(
             best_strategy=best_strat,
             best_fitness=best_fitness,
@@ -580,4 +671,5 @@ class EvolutionEngine:
             diversity_history=self.state.diversity_history.copy(),
             early_stopped=early_stopped,
             stop_reason=stop_reason,
+            dedup_stats=dedup_stats,
         )

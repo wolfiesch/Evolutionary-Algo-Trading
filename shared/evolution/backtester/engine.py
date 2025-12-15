@@ -3,6 +3,7 @@ Minimal backtester engine - asset-agnostic.
 
 Phase 2A: Single symbol, basic metrics.
 """
+import logging
 import math
 from typing import Callable, Optional
 import pandas as pd
@@ -13,6 +14,8 @@ from shared.evolution.backtester.models import (
     BacktestResults,
     Trade,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # Type alias for strategy evaluation function
@@ -308,12 +311,17 @@ class MinimalBacktester:
 
         Assumes risk-free rate = 0 for simplicity.
 
+        NOTE: Sharpe is capped at [-10, +10] to prevent extreme outliers.
+        This is a FLOOR/CEILING, not a sentinel value. Strategies hitting
+        -10 are genuinely terrible (massive losses). The fitness calculator
+        uses -999 as the actual sentinel for disqualified strategies.
+
         Args:
             equity_curve: Series of equity values
             periods_per_year: Number of periods in a year (525600 for 1-min candles)
 
         Returns:
-            Annualized Sharpe ratio
+            Annualized Sharpe ratio (clamped to [-10, +10])
         """
         if len(equity_curve) < 2:
             return 0.0
@@ -327,8 +335,24 @@ class MinimalBacktester:
         # Sharpe = mean(returns) / std(returns) * sqrt(periods_per_year)
         sharpe = (returns.mean() / returns.std()) * math.sqrt(periods_per_year)
 
-        # Cap at reasonable bounds
-        return max(-10.0, min(10.0, sharpe))
+        # Cap at reasonable bounds - log if floor/ceiling is hit
+        SHARPE_FLOOR = -10.0
+        SHARPE_CEILING = 10.0
+
+        if sharpe < SHARPE_FLOOR:
+            logger.debug(
+                f"Sharpe floor hit: raw={sharpe:.2f}, capped to {SHARPE_FLOOR} "
+                f"(strategy is extremely unprofitable)"
+            )
+            return SHARPE_FLOOR
+        elif sharpe > SHARPE_CEILING:
+            logger.debug(
+                f"Sharpe ceiling hit: raw={sharpe:.2f}, capped to {SHARPE_CEILING} "
+                f"(may indicate overfitting or data issues)"
+            )
+            return SHARPE_CEILING
+
+        return sharpe
 
     def _empty_results(self, symbol: str) -> BacktestResults:
         """Return empty results for insufficient data."""

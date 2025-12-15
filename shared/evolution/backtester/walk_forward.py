@@ -3,6 +3,7 @@ Walk-forward validation - Phase 2C.
 
 Rolling window validation to prevent overfitting.
 """
+import logging
 import math
 from typing import Callable
 import pandas as pd
@@ -16,6 +17,14 @@ from shared.evolution.backtester.models import (
     Trade,
 )
 from shared.evolution.backtester.engine import MinimalBacktester, StrategyEvaluator
+
+logger = logging.getLogger(__name__)
+
+# Sharpe bounds - these are FLOOR/CEILING values, not sentinels
+# Strategies hitting -10 are genuinely terrible. The fitness calculator
+# uses -999 as the actual sentinel for disqualified strategies.
+SHARPE_FLOOR = -10.0
+SHARPE_CEILING = 10.0
 
 
 class WalkForwardValidator:
@@ -198,8 +207,16 @@ class WalkForwardValidator:
             # Sharpe
             returns = equity_curve.pct_change().dropna()
             if len(returns) > 1 and returns.std() > 0:
-                sharpe = (returns.mean() / returns.std()) * math.sqrt(525600)
-                sharpe = max(-10.0, min(10.0, sharpe))
+                sharpe_raw = (returns.mean() / returns.std()) * math.sqrt(525600)
+                # Apply floor/ceiling with logging
+                if sharpe_raw < SHARPE_FLOOR:
+                    logger.debug(f"Walk-forward Sharpe floor hit: raw={sharpe_raw:.2f}, capped to {SHARPE_FLOOR}")
+                    sharpe = SHARPE_FLOOR
+                elif sharpe_raw > SHARPE_CEILING:
+                    logger.debug(f"Walk-forward Sharpe ceiling hit: raw={sharpe_raw:.2f}, capped to {SHARPE_CEILING}")
+                    sharpe = SHARPE_CEILING
+                else:
+                    sharpe = sharpe_raw
             else:
                 sharpe = 0.0
         else:
