@@ -4,7 +4,7 @@ from pathlib import Path
 from contextlib import contextmanager
 from typing import Iterator
 
-from data.storage.models import Candle
+from crypto.data.storage.models import Candle
 
 
 class CandleRepository:
