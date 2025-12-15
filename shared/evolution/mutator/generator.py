@@ -305,6 +305,7 @@ class StrategyGenerator:
 def generate_initial_population(
     generator: StrategyGenerator,
     size: int = 5,
+    custom_themes: list[str] | None = None,
 ) -> list[GeneratedStrategy]:
     """
     Generate initial population of strategies.
@@ -312,16 +313,18 @@ def generate_initial_population(
     Args:
         generator: StrategyGenerator instance
         size: Number of strategies to generate
+        custom_themes: Optional list of themes to use instead of defaults
 
     Returns:
         List of generated strategies (may be smaller than size if failures)
     """
     strategies = []
 
-    # Use diverse themes
-    themes = random.sample(STRATEGY_THEMES, min(size, len(STRATEGY_THEMES)))
+    # Use custom themes if provided, otherwise use defaults
+    theme_pool = custom_themes if custom_themes else STRATEGY_THEMES
+    themes = random.sample(theme_pool, min(size, len(theme_pool)))
     if len(themes) < size:
-        themes.extend(random.choices(STRATEGY_THEMES, k=size - len(themes)))
+        themes.extend(random.choices(theme_pool, k=size - len(themes)))
 
     for theme in themes:
         strategy = generator.generate(theme=theme)
