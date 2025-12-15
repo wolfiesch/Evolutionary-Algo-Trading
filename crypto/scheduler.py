@@ -43,13 +43,25 @@ from shared.evolution.persistence import (
     get_shadow_pool_summary,
 )
 
-# Configure logging
+# Configure logging with unbuffered handlers for real-time visibility
+class FlushingFileHandler(logging.FileHandler):
+    """FileHandler that flushes after every write."""
+    def emit(self, record):
+        super().emit(record)
+        self.flush()
+
+class FlushingStreamHandler(logging.StreamHandler):
+    """StreamHandler that flushes after every write."""
+    def emit(self, record):
+        super().emit(record)
+        self.flush()
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(settings.logs_dir / "scheduler.log"),
+        FlushingStreamHandler(),
+        FlushingFileHandler(settings.logs_dir / "scheduler.log"),
     ],
 )
 logger = logging.getLogger(__name__)
@@ -119,11 +131,22 @@ class EvolutionScheduler:
             logger.info("Discord notifications enabled for evolution scheduler")
 
     def _send_discord(self, embed: dict) -> None:
-        """Send a Discord notification synchronously."""
-        if not self.notifier:
+        """Send a Discord notification synchronously using requests."""
+        if not settings.discord_webhook_url:
             return
         try:
-            asyncio.run(self.notifier._send([embed]))
+            import requests
+            payload = {
+                "embeds": [embed],
+                "username": "Crypto Alpha",
+            }
+            response = requests.post(
+                settings.discord_webhook_url,
+                json=payload,
+                timeout=5,
+            )
+            if response.status_code not in (200, 204):
+                logger.warning(f"Discord webhook returned {response.status_code}")
         except Exception as e:
             logger.warning(f"Failed to send Discord notification: {e}")
 
@@ -136,6 +159,46 @@ class EvolutionScheduler:
                 {"name": "Symbol", "value": symbol, "inline": True},
                 {"name": "Generations", "value": str(generations), "inline": True},
                 {"name": "Population", "value": str(population), "inline": True},
+            ],
+            "timestamp": datetime.utcnow().isoformat(),
+        })
+
+    def _notify_strategy_evaluated(
+        self,
+        strategy_name: str,
+        score: float,
+        progress_pct: float,
+        phase: str,
+        is_best: bool = False,
+    ) -> None:
+        """Send notification when a strategy is evaluated (per-strategy visibility)."""
+        # Use different colors based on score
+        if score >= 3.0:
+            color = 0x00FF00  # Green - excellent
+            emoji = "🌟"
+        elif score >= 1.0:
+            color = 0xFFFF00  # Yellow - good
+            emoji = "✅"
+        elif score > 0:
+            color = 0xFFA500  # Orange - mediocre
+            emoji = "📊"
+        else:
+            color = 0x808080  # Gray - disqualified
+            emoji = "⚪"
+
+        title = f"{emoji} Strategy Evaluated"
+        if is_best:
+            title = "🏆 New Best Strategy!"
+            color = 0x00FF00
+
+        self._send_discord({
+            "title": title,
+            "color": color,
+            "fields": [
+                {"name": "Strategy", "value": strategy_name, "inline": True},
+                {"name": "Score", "value": f"{score:.3f}", "inline": True},
+                {"name": "Progress", "value": f"{progress_pct:.0f}%", "inline": True},
+                {"name": "Phase", "value": phase, "inline": True},
             ],
             "timestamp": datetime.utcnow().isoformat(),
         })
@@ -240,14 +303,38 @@ class EvolutionScheduler:
         # Send start notification
         self._notify_evolution_start(symbol, generations, population_size)
 
+        # Track best score for detecting new bests
+        self._best_score_so_far = 0.0
+
+        # Create progress callback for per-strategy Discord notifications
+        def progress_callback(strategy_name: str, fitness, progress_info: dict):
+            """Callback invoked after each strategy evaluation."""
+            is_new_best = fitness.final_score > self._best_score_so_far
+            if is_new_best and fitness.final_score > 0:
+                self._best_score_so_far = fitness.final_score
+
+            # Send Discord notification for each evaluation
+            self._notify_strategy_evaluated(
+                strategy_name=strategy_name,
+                score=fitness.final_score,
+                progress_pct=progress_info.get("progress_pct", 0),
+                phase=progress_info.get("phase", "unknown"),
+                is_best=is_new_best and fitness.final_score > 0,
+            )
+
+        # Progress file for polling
+        progress_file = settings.logs_dir / "evolution_progress.json"
+
         try:
-            # Run evolution
+            # Run evolution with progress tracking
             result = run_full_evolution(
                 symbol=symbol,
                 generations=generations,
                 population_size=population_size,
                 db_path=self.db_path,
                 checkpoint_dir=self.checkpoint_dir,
+                progress_callback=progress_callback,
+                progress_file=progress_file,
             )
 
             if result and result.best_strategy and result.best_fitness:

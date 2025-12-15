@@ -26,6 +26,11 @@ from shared.evolution.mutator.selection import (
 logger = logging.getLogger(__name__)
 
 
+# Type alias for progress callback
+# Callback receives: (strategy_name, fitness_result, progress_info)
+ProgressCallback = Callable[[str, FitnessResult, dict], None]
+
+
 @dataclass
 class EvolutionConfig:
     """Configuration for evolution engine."""
@@ -40,6 +45,7 @@ class EvolutionConfig:
     max_stagnation: int = 5  # Generations without improvement before reset
     checkpoint_interval: int = 5  # Save checkpoint every N generations
     checkpoint_dir: Optional[str] = None  # Directory for checkpoints
+    progress_file: Optional[str] = None  # Path to progress JSON file for polling
 
 
 @dataclass
@@ -112,6 +118,7 @@ class EvolutionEngine:
         generator: StrategyGenerator,
         crossover: CrossoverOperator,
         evaluator: EvaluationFunc,
+        progress_callback: Optional[ProgressCallback] = None,
     ):
         """
         Initialize evolution engine.
@@ -121,14 +128,76 @@ class EvolutionEngine:
             generator: Strategy generator for initial pop and mutations
             crossover: Crossover operator for combining strategies
             evaluator: Function that evaluates a strategy and returns (fitness, summary)
+            progress_callback: Optional callback invoked after each strategy evaluation
         """
         self.config = config
         self.generator = generator
         self.crossover = crossover
         self.evaluator = evaluator
+        self.progress_callback = progress_callback
 
         self.state = EvolutionState()
         self._population: list[StrategyFitnessPair] = []
+        self._eval_count = 0
+        self._total_evals = 0
+        self._start_time = None
+
+    def _report_progress(
+        self,
+        strategy_name: str,
+        fitness: FitnessResult,
+        phase: str = "evaluation",
+    ):
+        """Report progress via callback and/or progress file."""
+        self._eval_count += 1
+
+        # Build progress info
+        elapsed = time.time() - self._start_time if self._start_time else 0
+        progress_info = {
+            "phase": phase,
+            "generation": self.state.generation,
+            "eval_count": self._eval_count,
+            "total_evals": self._total_evals,
+            "progress_pct": (self._eval_count / self._total_evals * 100) if self._total_evals > 0 else 0,
+            "elapsed_sec": elapsed,
+            "best_score": self.state.best_score,
+            "current_score": fitness.final_score,
+            "strategy_name": strategy_name,
+            "disqualified": fitness.disqualified,
+            "timestamp": datetime.now().isoformat(),
+        }
+
+        # Invoke callback if provided
+        if self.progress_callback:
+            try:
+                self.progress_callback(strategy_name, fitness, progress_info)
+            except Exception as e:
+                logger.warning(f"Progress callback error: {e}")
+
+        # Write progress file if configured
+        if self.config.progress_file:
+            self._write_progress_file(progress_info)
+
+    def _write_progress_file(self, progress_info: dict):
+        """Write current progress to JSON file for polling."""
+        try:
+            progress_path = Path(self.config.progress_file)
+            progress_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Include population summary
+            progress_data = {
+                **progress_info,
+                "population_size": len(self._population),
+                "top_strategies": [
+                    {"name": s.name, "score": f.final_score}
+                    for s, f in self._population[:5]
+                ] if self._population else [],
+            }
+
+            with open(progress_path, "w") as f:
+                json.dump(progress_data, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Failed to write progress file: {e}")
 
     def run(
         self,
@@ -157,8 +226,16 @@ class EvolutionEngine:
         start_gen = self.state.generation
         target_gen = start_gen + self.config.generations
 
+        # Initialize progress tracking
+        self._start_time = time.time()
+        # Estimate total evals: initial pop + (gens * offspring per gen)
+        offspring_per_gen = self.config.population_size - self.config.elite_count
+        self._total_evals = len(self._population) + (self.config.generations * offspring_per_gen)
+        self._eval_count = len(self._population)  # Initial pop already evaluated
+
         logger.info(f"Starting evolution from gen {start_gen} to gen {target_gen}")
         logger.info(f"Population size: {len(self._population)}")
+        logger.info(f"Estimated total evaluations: {self._total_evals}")
 
         # Main evolution loop
         while self.state.generation < target_gen:
@@ -222,11 +299,19 @@ class EvolutionEngine:
         """Evaluate and sort initial population."""
         logger.info(f"Evaluating {len(initial)} initial strategies...")
 
+        # Set up progress tracking for initial evaluation
+        self._start_time = time.time()
+        self._total_evals = len(initial)
+        self._eval_count = 0
+
         self._population = []
         for strat in initial:
             fitness, _ = self.evaluator(strat)
             self._population.append((strat, fitness))
             logger.info(f"  {strat.name}: Score={fitness.final_score:.3f}")
+
+            # Report progress
+            self._report_progress(strat.name, fitness, phase="initial_population")
 
         # Sort by fitness (best first)
         self._population.sort(key=lambda x: x[1].final_score, reverse=True)
@@ -278,6 +363,9 @@ class EvolutionEngine:
 
                 status = "DISQUALIFIED" if fitness.disqualified else f"Score={fitness.final_score:.3f}"
                 logger.info(f"Offspring: {offspring.name} - {status}")
+
+                # Report progress
+                self._report_progress(offspring.name, fitness, phase="evolution")
             else:
                 # Fallback: generate new random strategy
                 logger.warning("Operator failed, generating fresh strategy...")
@@ -285,6 +373,9 @@ class EvolutionEngine:
                 if fresh:
                     fitness, _ = self.evaluator(fresh)
                     new_population.append((fresh, fitness))
+
+                    # Report progress
+                    self._report_progress(fresh.name, fitness, phase="evolution_fallback")
 
         # Sort by fitness
         self._population = sorted(new_population, key=lambda x: x[1].final_score, reverse=True)

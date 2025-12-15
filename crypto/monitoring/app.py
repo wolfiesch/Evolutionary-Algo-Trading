@@ -246,6 +246,89 @@ def api_summary():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/evolution-progress")
+def api_evolution_progress():
+    """
+    Real-time evolution progress endpoint.
+
+    Reads from progress JSON file written by evolution engine.
+
+    Returns:
+        {
+            "phase": "initial_population|evolution",
+            "generation": 1,
+            "eval_count": 3,
+            "total_evals": 20,
+            "progress_pct": 15.0,
+            "elapsed_sec": 120.5,
+            "best_score": 2.45,
+            "current_score": 1.23,
+            "strategy_name": "MeanReversion_V1",
+            "top_strategies": [
+                {"name": "Strategy1", "score": 2.45},
+                {"name": "Strategy2", "score": 1.89}
+            ]
+        }
+    """
+    try:
+        progress_file = settings.logs_dir / "evolution_progress.json"
+        if progress_file.exists():
+            with open(progress_file) as f:
+                progress = json.load(f)
+            # Add file age for staleness detection
+            age_sec = (datetime.utcnow() - datetime.fromisoformat(progress.get("timestamp", "2000-01-01"))).total_seconds()
+            progress["age_sec"] = age_sec
+            progress["is_stale"] = age_sec > 300  # Stale if > 5 min old
+            return jsonify(progress)
+        else:
+            return jsonify({
+                "status": "no_evolution_running",
+                "message": "No evolution progress file found"
+            })
+    except Exception as e:
+        logger.error(f"Evolution progress failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/evolution-progress/stream")
+def api_evolution_stream():
+    """
+    Server-Sent Events (SSE) endpoint for real-time evolution updates.
+
+    Usage (JavaScript):
+        const evtSource = new EventSource('/api/evolution-progress/stream');
+        evtSource.onmessage = (event) => {
+            const progress = JSON.parse(event.data);
+            updateUI(progress);
+        };
+    """
+    from flask import Response
+    import time
+
+    def generate():
+        last_data = None
+        while True:
+            try:
+                progress_file = settings.logs_dir / "evolution_progress.json"
+                if progress_file.exists():
+                    with open(progress_file) as f:
+                        data = f.read()
+
+                    # Only send if data changed
+                    if data != last_data:
+                        last_data = data
+                        yield f"data: {data}\n\n"
+                else:
+                    yield 'data: {"status": "no_evolution_running"}\n\n'
+
+                time.sleep(2)  # Poll every 2 seconds
+            except Exception as e:
+                yield f'data: {{"error": "{str(e)}"}}\n\n'
+                time.sleep(5)
+
+    return Response(generate(), mimetype='text/event-stream')
+
+
 def main():
     """Run the monitoring dashboard server."""
     import argparse

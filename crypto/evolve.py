@@ -50,21 +50,46 @@ from shared.evolution.mutator import (
     StrategyGenerator,
     GeneratedStrategy,
     generate_initial_population,
+    MEAN_REVERSION_THEMES,
     # Phase 2D components
     EvolutionConfig,
     EvolutionEngine,
     CrossoverOperator,
 )
 
-# Configure logging
+# Configure logging with unbuffered handlers for real-time visibility
+class FlushingStreamHandler(logging.StreamHandler):
+    """StreamHandler that flushes after every write."""
+    def emit(self, record):
+        super().emit(record)
+        self.flush()
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        logging.StreamHandler(),
+        FlushingStreamHandler(),
     ]
 )
 logger = logging.getLogger(__name__)
+
+
+def get_market_filter_name(symbol: str) -> str:
+    """
+    Get the appropriate market filter primitive name for a trading symbol.
+
+    Uses self-referential filters (asset_trend) which check the trading asset's
+    own trend rather than cross-asset correlation (btc_trend) which often fails.
+
+    Args:
+        symbol: Trading pair (e.g., "BTCUSDT", "SOLUSDT", "ETHUSDT")
+
+    Returns:
+        Market filter primitive name to use in strategy generation
+    """
+    # Use asset_trend for all symbols - self-referential is more reliable
+    # than cross-asset correlation
+    return "asset_trend"
 
 
 def create_evaluator(strategy: Strategy, parser: GeneExpressionParser):
@@ -478,10 +503,13 @@ def run_evolution(
         logger.error(f"LLM initialization failed: {e}")
         return
 
-    # Initialize generator
+    # Initialize generator with self-referential market filter
+    market_filter = get_market_filter_name(symbol)
+    logger.info(f"Using market filter: {market_filter}")
+
     generator = StrategyGenerator(
         llm_client=llm_client,
-        market_filter_name="btc_trend",
+        market_filter_name=market_filter,
     )
 
     # Generate initial population
@@ -636,6 +664,9 @@ def run_full_evolution(
     log_dir: Path = None,
     checkpoint_dir: Path = None,
     resume_from: str = None,
+    progress_callback=None,
+    progress_file: Path = None,
+    custom_themes: list[str] = None,
 ):
     """
     Run Phase 2D full evolution with the EvolutionEngine.
@@ -651,6 +682,9 @@ def run_full_evolution(
         log_dir: Directory for logs
         checkpoint_dir: Directory for checkpoints
         resume_from: Path to checkpoint file to resume from
+        progress_callback: Optional callback(strategy_name, fitness, progress_info) for real-time updates
+        progress_file: Optional path to JSON file for progress polling
+        custom_themes: Optional list of strategy themes to use instead of defaults
     """
     if db_path is None:
         # Use main database (settings.sqlite_path), fall back to cloud DB
@@ -730,14 +764,17 @@ def run_full_evolution(
         logger.error(f"LLM initialization failed: {e}")
         return
 
-    # Initialize generator and crossover
+    # Initialize generator and crossover with self-referential market filter
+    market_filter = get_market_filter_name(symbol)
+    logger.info(f"Using market filter: {market_filter}")
+
     generator = StrategyGenerator(
         llm_client=llm_client,
-        market_filter_name="btc_trend",
+        market_filter_name=market_filter,
     )
     crossover = CrossoverOperator(
         llm_client=llm_client,
-        market_filter_name="btc_trend",
+        market_filter_name=market_filter,
     )
 
     # Create evaluation function
@@ -772,12 +809,14 @@ def run_full_evolution(
         max_stagnation=5,
         checkpoint_interval=3,
         checkpoint_dir=str(checkpoint_dir),
+        progress_file=str(progress_file) if progress_file else None,
     )
 
-    # Create engine
+    # Create engine with optional progress callback
     engine = EvolutionEngine(
         config=config,
         generator=generator,
+        progress_callback=progress_callback,
         crossover=crossover,
         evaluator=eval_strategy,
     )
@@ -787,8 +826,9 @@ def run_full_evolution(
         result = engine.run(resume_from=resume_from)
     else:
         # Generate initial population
-        logger.info(f"Generating initial population of {population_size}...")
-        initial_pop = generate_initial_population(generator, size=population_size)
+        theme_mode = "mean-reversion" if custom_themes else "default"
+        logger.info(f"Generating initial population of {population_size} (themes: {theme_mode})...")
+        initial_pop = generate_initial_population(generator, size=population_size, custom_themes=custom_themes)
 
         if not initial_pop:
             logger.error("Failed to generate initial population")
@@ -895,6 +935,11 @@ def main():
         default=None,
         help="Directory for checkpoints (Phase 2D only)"
     )
+    arg_parser.add_argument(
+        "--mean-reversion",
+        action="store_true",
+        help="Use mean-reversion focused themes (better for choppy/sideways markets)"
+    )
 
     args = arg_parser.parse_args()
 
@@ -903,6 +948,7 @@ def main():
     # Phase 2D: Full evolution engine
     if args.full:
         checkpoint_dir = Path(args.checkpoint_dir) if args.checkpoint_dir else None
+        custom_themes = MEAN_REVERSION_THEMES if args.mean_reversion else None
         run_full_evolution(
             symbol=args.symbol,
             generations=args.generations,
@@ -910,6 +956,7 @@ def main():
             db_path=db_path,
             checkpoint_dir=checkpoint_dir,
             resume_from=args.resume,
+            custom_themes=custom_themes,
         )
     else:
         # Phase 2A/2B/2C: Simple evolution loop

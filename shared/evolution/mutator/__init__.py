@@ -15,6 +15,7 @@ from shared.evolution.mutator.generator import (
 )
 from shared.evolution.mutator.prompts import (
     STRATEGY_THEMES,
+    MEAN_REVERSION_THEMES,
     get_generation_prompt,
     get_mutation_prompt,
     get_crossover_prompt,
@@ -32,6 +33,7 @@ from shared.evolution.mutator.evolution import (
     EvolutionState,
     EvolutionResult,
     EvolutionEngine,
+    ProgressCallback,
 )
 
 __all__ = [
@@ -49,6 +51,7 @@ __all__ = [
     "generate_initial_population",
     # Prompts
     "STRATEGY_THEMES",
+    "MEAN_REVERSION_THEMES",
     "get_generation_prompt",
     "get_mutation_prompt",
     "get_crossover_prompt",
@@ -65,4 +68,5 @@ __all__ = [
     "EvolutionState",
     "EvolutionResult",
     "EvolutionEngine",
+    "ProgressCallback",
 ]
