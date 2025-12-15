@@ -2,7 +2,7 @@
 LLM client wrapper - provider-agnostic interface.
 
 Supports OpenAI and Anthropic APIs with unified interface.
-Default: OpenAI (gpt-4o) for cost efficiency.
+Default: OpenAI GPT-5.2 Instant for cost efficiency.
 """
 import os
 import json
@@ -22,6 +22,7 @@ class LLMProvider(Enum):
     """Supported LLM providers."""
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
+    GEMINI = "gemini"
 
 
 @dataclass
@@ -30,7 +31,7 @@ class LLMConfig:
     provider: LLMProvider
     model: str
     api_key: str
-    max_tokens: int = 1024
+    max_tokens: int = 300  # Reduced from 1024 - JSON responses are ~150-200 tokens
     temperature: float = 0.7
     log_dir: Optional[Path] = None  # For interaction logging
 
@@ -45,7 +46,7 @@ class LLMConfig:
         """
         if provider == LLMProvider.OPENAI:
             api_key = os.environ.get("OPENAI_API_KEY", "")
-            model = "gpt-4o"
+            model = "gpt-5.2-chat-latest"  # GPT-5.2 Instant - fast & efficient for JSON
         else:
             api_key = os.environ.get("ANTHROPIC_API_KEY", "")
             model = "claude-sonnet-4-20250514"
@@ -204,6 +205,39 @@ class AnthropicClient(LLMClient):
         return response.content[0].text
 
 
+class GeminiClient(LLMClient):
+    """Google Gemini API implementation."""
+
+    def __init__(self, config: LLMConfig):
+        super().__init__(config)
+        self._model = None
+
+    def _get_model(self):
+        """Lazy-initialize Gemini model."""
+        if self._model is None:
+            try:
+                import google.generativeai as genai
+                genai.configure(api_key=self.config.api_key)
+                self._model = genai.GenerativeModel(self.config.model)
+            except ImportError:
+                raise ImportError("google-generativeai package not installed. Run: pip install google-generativeai")
+        return self._model
+
+    def _call_api(self, prompt: str) -> str:
+        """Call Gemini API."""
+        model = self._get_model()
+
+        response = model.generate_content(
+            prompt,
+            generation_config={
+                "max_output_tokens": self.config.max_tokens,
+                "temperature": self.config.temperature,
+            }
+        )
+
+        return response.text
+
+
 def create_llm_client(config: LLMConfig) -> LLMClient:
     """
     Factory function to create appropriate LLM client.
@@ -212,12 +246,14 @@ def create_llm_client(config: LLMConfig) -> LLMClient:
         config: LLMConfig with provider, model, api_key
 
     Returns:
-        LLMClient instance (OpenAIClient or AnthropicClient)
+        LLMClient instance (OpenAIClient, AnthropicClient, or GeminiClient)
     """
     if config.provider == LLMProvider.OPENAI:
         return OpenAIClient(config)
     elif config.provider == LLMProvider.ANTHROPIC:
         return AnthropicClient(config)
+    elif config.provider == LLMProvider.GEMINI:
+        return GeminiClient(config)
     else:
         raise ValueError(f"Unknown provider: {config.provider}")
 
@@ -226,7 +262,7 @@ def create_default_client(log_dir: Optional[Path] = None) -> LLMClient:
     """
     Create default LLM client from environment.
 
-    Tries OpenAI first, falls back to Anthropic.
+    Priority: Anthropic > OpenAI > Gemini (Anthropic reliable, others have quota issues)
 
     Args:
         log_dir: Optional directory for logging interactions
@@ -234,18 +270,7 @@ def create_default_client(log_dir: Optional[Path] = None) -> LLMClient:
     Returns:
         LLMClient instance
     """
-    # Try OpenAI first
-    openai_key = os.environ.get("OPENAI_API_KEY")
-    if openai_key:
-        config = LLMConfig(
-            provider=LLMProvider.OPENAI,
-            model="gpt-4o",
-            api_key=openai_key,
-            log_dir=log_dir,
-        )
-        return OpenAIClient(config)
-
-    # Fall back to Anthropic
+    # Try Anthropic first (most reliable)
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
     if anthropic_key:
         config = LLMConfig(
@@ -256,6 +281,28 @@ def create_default_client(log_dir: Optional[Path] = None) -> LLMClient:
         )
         return AnthropicClient(config)
 
+    # Try OpenAI
+    openai_key = os.environ.get("OPENAI_API_KEY")
+    if openai_key:
+        config = LLMConfig(
+            provider=LLMProvider.OPENAI,
+            model="gpt-5.2-chat-latest",  # GPT-5.2 Instant - fast & efficient
+            api_key=openai_key,
+            log_dir=log_dir,
+        )
+        return OpenAIClient(config)
+
+    # Try Gemini as last fallback
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    if gemini_key:
+        config = LLMConfig(
+            provider=LLMProvider.GEMINI,
+            model="gemini-2.0-flash",
+            api_key=gemini_key,
+            log_dir=log_dir,
+        )
+        return GeminiClient(config)
+
     raise ValueError(
-        "No LLM API key found. Set OPENAI_API_KEY or ANTHROPIC_API_KEY environment variable."
+        "No LLM API key found. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY environment variable."
     )

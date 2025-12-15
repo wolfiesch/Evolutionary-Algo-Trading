@@ -16,6 +16,7 @@ Requirements:
     - Historical candle data in SQLite database
 """
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -78,8 +79,13 @@ def get_market_filter_name(symbol: str) -> str:
     """
     Get the appropriate market filter primitive name for a trading symbol.
 
-    Uses self-referential filters (asset_trend) which check the trading asset's
-    own trend rather than cross-asset correlation (btc_trend) which often fails.
+    Based on empirical evidence from evolution runs:
+    - BTC: asset_trend (self-referential, same as btc_trend for BTC)
+    - Altcoins (SOL, ETH): btc_trend (cross-asset correlation works better)
+
+    Evidence:
+    - SOL with btc_trend: Sharpe 2.73
+    - SOL with asset_trend: Sharpe -10 (failed)
 
     Args:
         symbol: Trading pair (e.g., "BTCUSDT", "SOLUSDT", "ETHUSDT")
@@ -87,9 +93,11 @@ def get_market_filter_name(symbol: str) -> str:
     Returns:
         Market filter primitive name to use in strategy generation
     """
-    # Use asset_trend for all symbols - self-referential is more reliable
-    # than cross-asset correlation
-    return "asset_trend"
+    # BTC uses self-referential (asset_trend = btc_trend for BTC)
+    if symbol.upper().startswith("BTC"):
+        return "asset_trend"
+    # Altcoins use cross-asset BTC trend filter
+    return "btc_trend"
 
 
 def create_evaluator(strategy: Strategy, parser: GeneExpressionParser):
@@ -667,6 +675,7 @@ def run_full_evolution(
     progress_callback=None,
     progress_file: Path = None,
     custom_themes: list[str] = None,
+    seed_strategy_path: Path = None,
 ):
     """
     Run Phase 2D full evolution with the EvolutionEngine.
@@ -685,6 +694,7 @@ def run_full_evolution(
         progress_callback: Optional callback(strategy_name, fitness, progress_info) for real-time updates
         progress_file: Optional path to JSON file for progress polling
         custom_themes: Optional list of strategy themes to use instead of defaults
+        seed_strategy_path: Path to JSON file with seed strategy for genetic transplantation
     """
     if db_path is None:
         # Use main database (settings.sqlite_path), fall back to cloud DB
@@ -825,10 +835,37 @@ def run_full_evolution(
     if resume_from:
         result = engine.run(resume_from=resume_from)
     else:
+        # Load seed strategy if provided (genetic transplantation)
+        seed_strategy = None
+        if seed_strategy_path and seed_strategy_path.exists():
+            try:
+                with open(seed_strategy_path) as f:
+                    seed_data = json.load(f)
+                seed_strategy = GeneratedStrategy(
+                    name=f"Seed_{seed_data.get('strategy_name', 'Unknown')}",
+                    entry_long=seed_data.get('entry_long', ''),
+                    exit_long=seed_data.get('exit_long', ''),
+                    entry_short=seed_data.get('entry_short'),
+                    exit_short=seed_data.get('exit_short'),
+                    rationale=f"Transplanted from {seed_data.get('strategy_name', 'unknown source')} (Sharpe: {seed_data.get('backtest_sharpe', 'N/A')})",
+                )
+                logger.info(f"Loaded seed strategy: {seed_strategy.name}")
+                logger.info(f"  Entry: {seed_strategy.entry_long}")
+                logger.info(f"  Exit: {seed_strategy.exit_long}")
+            except Exception as e:
+                logger.warning(f"Failed to load seed strategy: {e}")
+
         # Generate initial population
         theme_mode = "mean-reversion" if custom_themes else "default"
-        logger.info(f"Generating initial population of {population_size} (themes: {theme_mode})...")
-        initial_pop = generate_initial_population(generator, size=population_size, custom_themes=custom_themes)
+        # Generate one fewer if we have a seed
+        gen_size = population_size - 1 if seed_strategy else population_size
+        logger.info(f"Generating initial population of {gen_size} (themes: {theme_mode})...")
+        initial_pop = generate_initial_population(generator, size=gen_size, custom_themes=custom_themes)
+
+        # Insert seed strategy at the front (will be evaluated first)
+        if seed_strategy:
+            initial_pop.insert(0, seed_strategy)
+            logger.info(f"Added seed strategy to population (total: {len(initial_pop)})")
 
         if not initial_pop:
             logger.error("Failed to generate initial population")
@@ -940,6 +977,12 @@ def main():
         action="store_true",
         help="Use mean-reversion focused themes (better for choppy/sideways markets)"
     )
+    arg_parser.add_argument(
+        "--seed",
+        type=str,
+        default=None,
+        help="Path to JSON file with seed strategy for genetic transplantation"
+    )
 
     args = arg_parser.parse_args()
 
@@ -949,6 +992,7 @@ def main():
     if args.full:
         checkpoint_dir = Path(args.checkpoint_dir) if args.checkpoint_dir else None
         custom_themes = MEAN_REVERSION_THEMES if args.mean_reversion else None
+        seed_path = Path(args.seed) if args.seed else None
         run_full_evolution(
             symbol=args.symbol,
             generations=args.generations,
@@ -957,6 +1001,7 @@ def main():
             checkpoint_dir=checkpoint_dir,
             resume_from=args.resume,
             custom_themes=custom_themes,
+            seed_strategy_path=seed_path,
         )
     else:
         # Phase 2A/2B/2C: Simple evolution loop
