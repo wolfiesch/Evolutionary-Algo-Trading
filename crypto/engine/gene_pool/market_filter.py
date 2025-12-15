@@ -3,44 +3,34 @@ import pandas as pd
 from ta.trend import EMAIndicator
 
 
-def btc_trend(btc_candles: pd.DataFrame, window: int) -> float:
+def _asset_trend(candles: pd.DataFrame, window: int) -> float:
     """
-    BTC trend filter - MANDATORY for all altcoin long entries.
+    Generic asset trend filter - checks if asset is in uptrend.
 
-    "Don't buy alts when BTC is dumping."
+    Used by btc_trend, sol_trend, eth_trend - each passes its own candles.
 
     Args:
-        btc_candles: OHLCV DataFrame for BTCUSDT (oldest first)
+        candles: OHLCV DataFrame for the asset (oldest first)
         window: EMA window for trend determination
 
     Returns:
-        +1.0 = BTC stable or rising (safe to long alts)
-        -1.0 = BTC dumping (avoid new longs)
+        +1.0 = Asset stable or rising (safe to trade)
+        -1.0 = Asset dumping (avoid new longs)
         -1.0 if insufficient data (conservative default)
-
-    Rule: All entry_long conditions MUST include btc_trend(window) >= 0
-
-    Implementation:
-        1. Calculate long EMA (specified window)
-        2. Calculate short EMA (window // 4, min 5)
-        3. BTC is "safe" if:
-           - Price >= long EMA * 0.98 (2% tolerance for noise)
-           - Short EMA > long EMA (positive momentum)
-        4. Return +1.0 if safe, -1.0 otherwise
     """
     # Check sufficient data
-    if len(btc_candles) < window:
+    if len(candles) < window:
         return -1.0  # Conservative default
 
     # Calculate long EMA using ta library
-    long_ema = EMAIndicator(btc_candles['close'], window=window).ema_indicator()
+    long_ema = EMAIndicator(candles['close'], window=window).ema_indicator()
 
     # Calculate short EMA (window // 4, min 5)
     short_window = max(window // 4, 5)
-    short_ema = EMAIndicator(btc_candles['close'], window=short_window).ema_indicator()
+    short_ema = EMAIndicator(candles['close'], window=short_window).ema_indicator()
 
     # Get the most recent values
-    current_price = btc_candles['close'].iloc[-1]
+    current_price = candles['close'].iloc[-1]
     current_long_ema = long_ema.iloc[-1]
     current_short_ema = short_ema.iloc[-1]
 
@@ -48,7 +38,7 @@ def btc_trend(btc_candles: pd.DataFrame, window: int) -> float:
     if pd.isna(current_long_ema) or pd.isna(current_short_ema):
         return -1.0
 
-    # BTC is "safe" if:
+    # Asset is "safe" if:
     # 1. Price >= EMA * 0.98 (2% tolerance for noise)
     # 2. Short EMA > Long EMA (positive momentum)
     price_above_ema = current_price >= current_long_ema * 0.98
@@ -58,3 +48,75 @@ def btc_trend(btc_candles: pd.DataFrame, window: int) -> float:
         return 1.0
     else:
         return -1.0
+
+
+def btc_trend(btc_candles: pd.DataFrame, window: int) -> float:
+    """
+    BTC trend filter - checks BTC market health.
+
+    For BTC trading: Self-referential (uses BTC's own data)
+    For altcoin trading: Cross-asset filter (may not correlate well)
+
+    Args:
+        btc_candles: OHLCV DataFrame for BTCUSDT (oldest first)
+        window: EMA window for trend determination
+
+    Returns:
+        +1.0 = BTC stable or rising
+        -1.0 = BTC dumping
+    """
+    return _asset_trend(btc_candles, window)
+
+
+def sol_trend(candles: pd.DataFrame, window: int) -> float:
+    """
+    SOL trend filter - checks if SOL is in uptrend.
+
+    Self-referential filter for SOLUSDT trading.
+    Use this instead of btc_trend when trading SOL.
+
+    Args:
+        candles: OHLCV DataFrame for SOLUSDT (oldest first)
+        window: EMA window for trend determination
+
+    Returns:
+        +1.0 = SOL stable or rising (safe to long)
+        -1.0 = SOL dumping (avoid new longs)
+    """
+    return _asset_trend(candles, window)
+
+
+def eth_trend(candles: pd.DataFrame, window: int) -> float:
+    """
+    ETH trend filter - checks if ETH is in uptrend.
+
+    Self-referential filter for ETHUSDT trading.
+    Use this instead of btc_trend when trading ETH.
+
+    Args:
+        candles: OHLCV DataFrame for ETHUSDT (oldest first)
+        window: EMA window for trend determination
+
+    Returns:
+        +1.0 = ETH stable or rising (safe to long)
+        -1.0 = ETH dumping (avoid new longs)
+    """
+    return _asset_trend(candles, window)
+
+
+def asset_trend(candles: pd.DataFrame, window: int) -> float:
+    """
+    Generic asset trend filter - checks if current asset is in uptrend.
+
+    Self-referential filter that works for any asset.
+    The parser passes the trading symbol's candles automatically.
+
+    Args:
+        candles: OHLCV DataFrame for the trading asset (oldest first)
+        window: EMA window for trend determination
+
+    Returns:
+        +1.0 = Asset stable or rising (safe to long)
+        -1.0 = Asset dumping (avoid new longs)
+    """
+    return _asset_trend(candles, window)

@@ -38,8 +38,15 @@ PRIMITIVES = {
     "vwap_distance": volume.vwap_distance,
     "atr_regime": volatility.atr_regime,
     "atr_percentile": volatility.atr_percentile,
-    "btc_trend": market_filter.btc_trend,
+    # Market filters
+    "btc_trend": market_filter.btc_trend,       # Cross-asset filter (uses BTC data)
+    "sol_trend": market_filter.sol_trend,       # Self-referential for SOL
+    "eth_trend": market_filter.eth_trend,       # Self-referential for ETH
+    "asset_trend": market_filter.asset_trend,   # Generic self-referential (uses trading symbol's data)
 }
+
+# Primitives that use the trading asset's own candles (not BTC)
+SELF_REFERENTIAL_PRIMITIVES = {"sol_trend", "eth_trend", "asset_trend"}
 
 OPERATORS = {
     "==": operator.eq,
@@ -236,11 +243,15 @@ class GeneExpressionParser:
         else:
             parsed_args = []
 
-        # Special handling for btc_trend - needs btc_candles
+        # Special handling for market filters
         if func_name == "btc_trend":
+            # btc_trend uses BTC candles (cross-asset filter)
             if btc_candles is None:
                 raise ValueError("btc_trend requires btc_candles parameter")
             return func(btc_candles, *parsed_args)
+        elif func_name in SELF_REFERENTIAL_PRIMITIVES:
+            # sol_trend, eth_trend, asset_trend use trading symbol's candles
+            return func(candles, *parsed_args)
         else:
             return func(candles, *parsed_args)
 

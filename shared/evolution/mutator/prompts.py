@@ -11,6 +11,8 @@ STRATEGY_GENERATION_PROMPT = """You are a quantitative trading strategy generato
 
 ### Market Filter (MANDATORY for entry_long)
 - {market_filter_name}(window: int) -> float  # +1.0 safe, -1.0 danger. MUST include >= 0 check
+  NOTE: This is a SELF-REFERENTIAL filter - it checks if the trading asset itself is in an uptrend.
+  This is better than cross-asset correlation which often fails.
 
 ### Trend
 - ema_trend(fast: int, slow: int) -> float  # +1.0 uptrend, -1.0 downtrend
@@ -120,6 +122,15 @@ STRATEGY_THEMES = [
     "Range trading in sideways markets",
     "Volume-confirmed trend following",
     "Basic RSI mean reversion (keep it simple)",  # NEW: simpler
+]
+
+# Mean-reversion focused themes (for assets in choppy/sideways markets)
+MEAN_REVERSION_THEMES = [
+    "Ultra-simple RSI bounce: buy when RSI < -0.2, sell when RSI > 0.3. Just 2 conditions total!",
+    "Bollinger Band mean reversion: buy at lower band, sell at upper band",
+    "Oversold bounce with VWAP confirmation",
+    "Simple oversold dip buyer with loose thresholds (RSI < -0.2 is enough!)",
+    "Range trading: buy oversold, exit neutral RSI",
 ]
 
 
