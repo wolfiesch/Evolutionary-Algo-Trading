@@ -46,10 +46,10 @@ class LLMConfig:
         """
         if provider == LLMProvider.OPENAI:
             api_key = os.environ.get("OPENAI_API_KEY", "")
-            model = "gpt-5.2-chat-latest"  # GPT-5.2 Instant - fast & efficient for JSON
+            model = "gpt-4o-mini"  # GPT-4o-mini - cheaper, fast for JSON generation
         else:
             api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-            model = "claude-sonnet-4-20250514"
+            model = "claude-sonnet-4-5-20250514"  # Sonnet 4.5 - same cost as 4, better performance
 
         return cls(
             provider=provider,
@@ -275,7 +275,7 @@ def create_default_client(log_dir: Optional[Path] = None) -> LLMClient:
     if anthropic_key:
         config = LLMConfig(
             provider=LLMProvider.ANTHROPIC,
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5-20250514",  # Sonnet 4.5 - same cost as 4, better performance
             api_key=anthropic_key,
             log_dir=log_dir,
         )
@@ -286,7 +286,7 @@ def create_default_client(log_dir: Optional[Path] = None) -> LLMClient:
     if openai_key:
         config = LLMConfig(
             provider=LLMProvider.OPENAI,
-            model="gpt-5.2-chat-latest",  # GPT-5.2 Instant - fast & efficient
+            model="gpt-4o-mini",  # GPT-4o-mini - cheaper, fast for JSON
             api_key=openai_key,
             log_dir=log_dir,
         )
@@ -297,7 +297,7 @@ def create_default_client(log_dir: Optional[Path] = None) -> LLMClient:
     if gemini_key:
         config = LLMConfig(
             provider=LLMProvider.GEMINI,
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",  # Gemini 2.5 Flash - fast & efficient
             api_key=gemini_key,
             log_dir=log_dir,
         )
