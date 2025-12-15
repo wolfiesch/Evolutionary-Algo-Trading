@@ -137,6 +137,113 @@ GOOD: Evolving {weight_momentum: 0.6, rsi_period: 14, entry_threshold: -0.3}  �
    - Position sizing fixed by risk engine
    - Parameters tune N and M, not the logic
 
+### Critical Architecture Requirements (From Review)
+
+The following requirements were identified in the [peer review](2025-12-15-review-parameter-architecture.md) and **MUST** be incorporated from Day 1:
+
+#### 1. Vectorization is Non-Negotiable
+
+**Problem:** Loop-based signal calculation is too slow for backtesting thousands of strategies.
+
+**Solution:** All signal calculations return `pd.Series`, not scalars:
+
+```python
+# BAD (scalar, requires loop per bar):
+def calculate_trend_signal(self, candles: pd.DataFrame) -> float:
+    return ema_trend(candles, fast, slow)  # Returns single value
+
+# GOOD (vectorized, entire history in one pass):
+def calculate_trend_signal(self, candles: pd.DataFrame) -> pd.Series:
+    return ema_trend_series(candles, fast, slow)  # Returns Series[float]
+```
+
+**Composite calculation must be vectorized:**
+
+```python
+def calculate_composite_signal(self, candles: pd.DataFrame) -> pd.Series:
+    """Vectorized weighted average across all signals."""
+    composite = pd.Series(0.0, index=candles.index)
+    total_weight = 0.0
+
+    for name in ['trend', 'momentum', 'mean_reversion', 'volatility', 'volume']:
+        weight = getattr(self.params, f'weight_{name}')
+        if abs(weight) > 0.01:
+            signal_series = getattr(self, f'calculate_{name}_signal')(candles)
+            composite += signal_series * weight
+            total_weight += abs(weight)
+
+    return composite / total_weight if total_weight > 0 else composite
+```
+
+**Backtester implications:**
+- Pre-compute entire signal series in one pass
+- Entry/exit decisions via vectorized comparison: `entries = composite > threshold`
+- No Python loops over candles during backtest
+
+#### 2. Regime-Switched Weights (Non-Linear Adaptability)
+
+**Problem:** A single set of static weights averages out to mediocrity:
+- In choppy markets, you want high mean-reversion, low trend-following
+- In trending markets, you want high trend-following, low mean-reversion
+- Static weights can't adapt, producing "average" performance everywhere
+
+**Solution:** Evolve **two weight sets** with a **regime selector**:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    REGIME-SWITCHED TEMPLATE                          │
+│                                                                      │
+│  ┌──────────────┐                                                   │
+│  │ REGIME GATE  │  regime_indicator (ADX/ATR) > regime_threshold?   │
+│  └──────┬───────┘                                                   │
+│         │                                                            │
+│    ┌────▼────┐        ┌────────────┐                                │
+│    │ YES     │        │ NO         │                                │
+│    │ Regime B│        │ Regime A   │                                │
+│    │ (Trend) │        │ (Range)    │                                │
+│    └────┬────┘        └─────┬──────┘                                │
+│         │                    │                                       │
+│  weights_B: {         weights_A: {                                  │
+│    trend: 0.8,          trend: 0.1,                                 │
+│    momentum: 0.5,       momentum: 0.3,                              │
+│    reversion: 0.1       reversion: 0.8                              │
+│  }                    }                                             │
+│         │                    │                                       │
+│         └────────┬───────────┘                                       │
+│                  ▼                                                   │
+│         composite_signal                                             │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Complexity cost:** 2× weight parameters
+**Performance gain:** Non-linear adaptability to market conditions
+
+#### 3. Native Short Architecture (Directional Intent)
+
+**Problem:** Designing "Long-Only" now makes adding shorts painful later. In crypto/forex, shorting is 50% of the opportunity set.
+
+**Solution:** Define composite signal as **Directional Intent**:
+
+```
+Composite Signal Range:
+  +1.0 = Maximum LONG conviction
+   0.0 = Neutral (no position)
+  -1.0 = Maximum SHORT conviction
+
+Entry Thresholds:
+  entry_threshold_long:  +0.3  (composite >  +0.3 → ENTER LONG)
+  entry_threshold_short: -0.3  (composite < -0.3 → ENTER SHORT)
+
+Exit Thresholds:
+  exit_threshold_long:  -0.1  (composite < -0.1 → EXIT LONG)
+  exit_threshold_short: +0.1  (composite > +0.1 → EXIT SHORT)
+```
+
+**Implementation:**
+- Negative weights naturally produce short signals (contrarian use)
+- Same template supports long-only (disable short thresholds) or bidirectional
+- No architectural changes needed later
+
 ---
 
 ## Parameter Schema Design
@@ -145,16 +252,54 @@ GOOD: Evolving {weight_momentum: 0.6, rsi_period: 14, entry_threshold: -0.3}  �
 
 ```python
 @dataclass
+class WeightVector:
+    """A set of signal weights (used for regime switching)"""
+    trend: float = 0.0           # EMA crossover signal
+    momentum: float = 0.0        # RSI-based momentum
+    mean_reversion: float = 0.0  # Bollinger Band position
+    volatility: float = 0.0      # ATR regime signal
+    volume: float = 0.0          # Volume intensity signal
+
+    def to_dict(self) -> Dict[str, float]:
+        return asdict(self)
+
+    def validate(self) -> list[str]:
+        errors = []
+        for field in ['trend', 'momentum', 'mean_reversion', 'volatility', 'volume']:
+            val = getattr(self, field)
+            if not -1.0 <= val <= 1.0:
+                errors.append(f"weight_{field} must be in [-1.0, 1.0], got {val}")
+        return errors
+
+
+@dataclass
 class UniversalParameters:
     """Parameters that apply to all asset classes"""
 
-    # === SIGNAL WEIGHTS ===
-    # Range: -1.0 to +1.0 (0 = disabled, negative = contrarian)
-    weight_trend: float = 0.0           # EMA crossover signal
-    weight_momentum: float = 0.0        # RSI-based momentum
-    weight_mean_reversion: float = 0.0  # Bollinger Band position
-    weight_volatility: float = 0.0      # ATR regime signal
-    weight_volume: float = 0.0          # Volume intensity signal
+    # === REGIME SELECTOR (for regime-switched weights) ===
+    regime_indicator: str = "adx"       # "adx", "atr_percentile", "bb_width"
+    regime_period: int = 14             # Period for regime indicator
+    regime_threshold: float = 25.0      # Above = Regime B (trending), Below = Regime A (ranging)
+
+    # === SIGNAL WEIGHTS - REGIME A (Low Vol / Ranging Market) ===
+    # Used when regime_indicator < regime_threshold
+    weights_A: WeightVector = field(default_factory=lambda: WeightVector(
+        trend=0.1,
+        momentum=0.3,
+        mean_reversion=0.8,  # Favor mean reversion in ranges
+        volatility=0.2,
+        volume=0.1,
+    ))
+
+    # === SIGNAL WEIGHTS - REGIME B (High Vol / Trending Market) ===
+    # Used when regime_indicator >= regime_threshold
+    weights_B: WeightVector = field(default_factory=lambda: WeightVector(
+        trend=0.8,           # Favor trend following in trends
+        momentum=0.5,
+        mean_reversion=0.1,
+        volatility=0.3,
+        volume=0.2,
+    ))
 
     # === SIGNAL PERIODS (Integers Only) ===
     # Trend
@@ -174,9 +319,14 @@ class UniversalParameters:
     # Volume
     volume_period: int = 20             # Range: 10-100
 
-    # === DECISION THRESHOLDS ===
-    entry_threshold: float = 0.3        # Range: 0.1-0.8
-    exit_threshold: float = -0.2        # Range: -0.8 to 0.2
+    # === DECISION THRESHOLDS (Bidirectional) ===
+    # Long entries/exits
+    entry_threshold_long: float = 0.3    # Range: 0.1-0.8 (composite > this → LONG)
+    exit_threshold_long: float = -0.1    # Range: -0.5 to 0.2 (composite < this → EXIT LONG)
+
+    # Short entries/exits (set entry_threshold_short > 0 to disable shorts)
+    entry_threshold_short: float = -0.3  # Range: -0.8 to -0.1 (composite < this → SHORT)
+    exit_threshold_short: float = 0.1    # Range: -0.2 to 0.5 (composite > this → EXIT SHORT)
 
     # === RISK PARAMETERS ===
     stop_loss_atr_mult: float = 2.0     # Range: 1.0-5.0
@@ -189,14 +339,27 @@ class UniversalParameters:
     # === MARKET FILTER (Required) ===
     market_filter_period: int = 60      # Range: 20-200
     market_filter_threshold: float = 0.0  # Range: -1.0 to 1.0
+
+    # === DIRECTION CONTROL ===
+    allow_long: bool = True             # Enable long positions
+    allow_short: bool = False           # Enable short positions (default: long-only)
 ```
 
 ### Parameter Constraints & Validation
 
 ```python
 PARAMETER_CONSTRAINTS = {
-    # Weights: bounded, continuous
-    "weight_*": {"min": -1.0, "max": 1.0, "type": float},
+    # Weights: bounded, continuous (applies to both WeightVector fields)
+    "weights_*.trend": {"min": -1.0, "max": 1.0, "type": float},
+    "weights_*.momentum": {"min": -1.0, "max": 1.0, "type": float},
+    "weights_*.mean_reversion": {"min": -1.0, "max": 1.0, "type": float},
+    "weights_*.volatility": {"min": -1.0, "max": 1.0, "type": float},
+    "weights_*.volume": {"min": -1.0, "max": 1.0, "type": float},
+
+    # Regime selector
+    "regime_indicator": {"allowed": ["adx", "atr_percentile", "bb_width"]},
+    "regime_period": {"min": 5, "max": 50, "type": int},
+    "regime_threshold": {"min": 10.0, "max": 50.0, "type": float},
 
     # Periods: bounded, integer-only
     "trend_fast_period": {"min": 3, "max": 50, "type": int},
@@ -206,9 +369,11 @@ PARAMETER_CONSTRAINTS = {
     "volatility_period": {"min": 5, "max": 50, "type": int},
     "volume_period": {"min": 10, "max": 100, "type": int},
 
-    # Thresholds: bounded, continuous
-    "entry_threshold": {"min": 0.1, "max": 0.8, "type": float},
-    "exit_threshold": {"min": -0.8, "max": 0.2, "type": float},
+    # Thresholds: bounded, bidirectional
+    "entry_threshold_long": {"min": 0.1, "max": 0.8, "type": float},
+    "exit_threshold_long": {"min": -0.5, "max": 0.2, "type": float},
+    "entry_threshold_short": {"min": -0.8, "max": -0.1, "type": float},
+    "exit_threshold_short": {"min": -0.2, "max": 0.5, "type": float},
 
     # Risk: bounded, continuous
     "stop_loss_atr_mult": {"min": 1.0, "max": 5.0, "type": float},
@@ -216,7 +381,8 @@ PARAMETER_CONSTRAINTS = {
 
     # Cross-parameter constraints
     "trend_fast_period < trend_slow_period": True,
-    "entry_threshold > exit_threshold": True,
+    "entry_threshold_long > exit_threshold_long": True,
+    "entry_threshold_short < exit_threshold_short": True,
     "take_profit_atr_mult > stop_loss_atr_mult": True,
 }
 ```
@@ -248,235 +414,258 @@ DISCRETIZATION = {
 
 ```python
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import Dict, Optional
+from dataclasses import dataclass, field, asdict
+from typing import Dict, Optional, Literal
 import pandas as pd
-
-@dataclass
-class StrategyParameters:
-    """Base class for strategy parameters (DNA)"""
-
-    # Universal parameters
-    weight_trend: float = 0.0
-    weight_momentum: float = 0.0
-    weight_mean_reversion: float = 0.0
-    weight_volatility: float = 0.0
-    weight_volume: float = 0.0
-
-    trend_fast_period: int = 9
-    trend_slow_period: int = 21
-    momentum_period: int = 14
-    reversion_period: int = 20
-    reversion_std_dev: int = 2
-    volatility_period: int = 14
-    volume_period: int = 20
-
-    entry_threshold: float = 0.3
-    exit_threshold: float = -0.2
-
-    stop_loss_atr_mult: float = 2.0
-    take_profit_atr_mult: float = 3.0
-
-    min_bars_between_trades: int = 5
-    max_position_bars: int = 100
-
-    market_filter_period: int = 60
-    market_filter_threshold: float = 0.0
-
-    def to_dict(self) -> Dict:
-        """Serialize for storage/transmission"""
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, d: Dict) -> 'StrategyParameters':
-        """Deserialize from storage"""
-        return cls(**d)
-
-    def validate(self) -> tuple[bool, list[str]]:
-        """Validate all constraints"""
-        errors = []
-
-        # Weight bounds
-        for attr in ['weight_trend', 'weight_momentum', 'weight_mean_reversion',
-                     'weight_volatility', 'weight_volume']:
-            val = getattr(self, attr)
-            if not -1.0 <= val <= 1.0:
-                errors.append(f"{attr} must be in [-1.0, 1.0], got {val}")
-
-        # Period ordering
-        if self.trend_fast_period >= self.trend_slow_period:
-            errors.append(f"trend_fast_period ({self.trend_fast_period}) must be < "
-                         f"trend_slow_period ({self.trend_slow_period})")
-
-        # Threshold ordering
-        if self.entry_threshold <= self.exit_threshold:
-            errors.append(f"entry_threshold ({self.entry_threshold}) must be > "
-                         f"exit_threshold ({self.exit_threshold})")
-
-        # Risk ordering
-        if self.take_profit_atr_mult <= self.stop_loss_atr_mult:
-            errors.append(f"take_profit_atr_mult ({self.take_profit_atr_mult}) must be > "
-                         f"stop_loss_atr_mult ({self.stop_loss_atr_mult})")
-
-        # At least one signal enabled
-        weights_sum = sum(abs(getattr(self, f'weight_{sig}'))
-                         for sig in ['trend', 'momentum', 'mean_reversion',
-                                    'volatility', 'volume'])
-        if weights_sum < 0.1:
-            errors.append("At least one signal weight must be non-zero")
-
-        return len(errors) == 0, errors
+import numpy as np
 
 
 class StrategyTemplate(ABC):
     """
     Base strategy template with FIXED LOGIC.
 
+    Key architectural features:
+    1. VECTORIZED: All signals return pd.Series for fast backtesting
+    2. REGIME-SWITCHED: Two weight sets selected by regime indicator
+    3. BIDIRECTIONAL: Native support for long AND short positions
+
     Subclasses implement asset-specific signal calculations,
     but the aggregation and decision logic is universal.
     """
 
-    def __init__(self, params: StrategyParameters):
+    def __init__(self, params: UniversalParameters):
         self.params = params
-        self._validate()
+        self._signal_cache: Dict[str, pd.Series] = {}
 
-    def _validate(self):
-        valid, errors = self.params.validate()
-        if not valid:
-            raise ValueError(f"Invalid parameters: {errors}")
+    # === REGIME DETECTION (Vectorized) ===
 
-    # === SIGNAL CALCULATION (Override in subclasses for asset-specific) ===
+    def calculate_regime_indicator(self, candles: pd.DataFrame) -> pd.Series:
+        """
+        Calculate regime indicator series.
+        Returns pd.Series where True = Regime B (trending), False = Regime A (ranging)
+        """
+        if self.params.regime_indicator == "adx":
+            from ta.trend import ADXIndicator
+            adx = ADXIndicator(
+                candles['high'], candles['low'], candles['close'],
+                window=self.params.regime_period
+            )
+            return adx.adx() >= self.params.regime_threshold
+
+        elif self.params.regime_indicator == "atr_percentile":
+            from shared.engine.gene_pool.volatility import atr_percentile_series
+            atr_pct = atr_percentile_series(candles, self.params.regime_period)
+            return atr_pct >= self.params.regime_threshold / 100.0  # Normalize
+
+        elif self.params.regime_indicator == "bb_width":
+            from ta.volatility import BollingerBands
+            bb = BollingerBands(candles['close'], window=self.params.regime_period)
+            bb_width = (bb.bollinger_hband() - bb.bollinger_lband()) / bb.bollinger_mavg()
+            # bb_width percentile
+            return bb_width >= bb_width.rolling(100).quantile(self.params.regime_threshold / 100.0)
+
+        else:
+            raise ValueError(f"Unknown regime indicator: {self.params.regime_indicator}")
+
+    def get_active_weights(self, is_regime_b: pd.Series) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series, pd.Series]:
+        """
+        Return weight series that switch based on regime.
+        Each returned series has the appropriate weight for each bar.
+        """
+        weights_a = self.params.weights_A
+        weights_b = self.params.weights_B
+
+        # Create weight series that switch based on regime
+        w_trend = pd.Series(np.where(is_regime_b, weights_b.trend, weights_a.trend), index=is_regime_b.index)
+        w_momentum = pd.Series(np.where(is_regime_b, weights_b.momentum, weights_a.momentum), index=is_regime_b.index)
+        w_reversion = pd.Series(np.where(is_regime_b, weights_b.mean_reversion, weights_a.mean_reversion), index=is_regime_b.index)
+        w_volatility = pd.Series(np.where(is_regime_b, weights_b.volatility, weights_a.volatility), index=is_regime_b.index)
+        w_volume = pd.Series(np.where(is_regime_b, weights_b.volume, weights_a.volume), index=is_regime_b.index)
+
+        return w_trend, w_momentum, w_reversion, w_volatility, w_volume
+
+    # === SIGNAL CALCULATION (Vectorized - return pd.Series) ===
 
     @abstractmethod
-    def calculate_market_filter(self, candles: pd.DataFrame) -> float:
-        """Asset-specific market filter. Returns -1.0 to +1.0"""
+    def calculate_market_filter(self, candles: pd.DataFrame) -> pd.Series:
+        """Asset-specific market filter. Returns pd.Series[-1.0 to +1.0]"""
         pass
 
-    def calculate_trend_signal(self, candles: pd.DataFrame) -> float:
-        """EMA crossover: +1.0 (uptrend) or -1.0 (downtrend)"""
-        from shared.engine.gene_pool.trend import ema_trend
-        return ema_trend(candles, self.params.trend_fast_period,
-                        self.params.trend_slow_period)
+    def calculate_trend_signal(self, candles: pd.DataFrame) -> pd.Series:
+        """EMA crossover: +1.0 (uptrend) or -1.0 (downtrend) as Series"""
+        from shared.engine.gene_pool.trend import ema_trend_series
+        return ema_trend_series(candles, self.params.trend_fast_period,
+                                self.params.trend_slow_period)
 
-    def calculate_momentum_signal(self, candles: pd.DataFrame) -> float:
-        """Normalized RSI: -1.0 (oversold) to +1.0 (overbought)"""
-        from shared.engine.gene_pool.mean_reversion import norm_rsi
-        return norm_rsi(candles, self.params.momentum_period)
+    def calculate_momentum_signal(self, candles: pd.DataFrame) -> pd.Series:
+        """Normalized RSI: -1.0 (oversold) to +1.0 (overbought) as Series"""
+        from shared.engine.gene_pool.mean_reversion import norm_rsi_series
+        return norm_rsi_series(candles, self.params.momentum_period)
 
-    def calculate_mean_reversion_signal(self, candles: pd.DataFrame) -> float:
-        """Bollinger position: -1.0 (lower band) to +1.0 (upper band)"""
-        from shared.engine.gene_pool.mean_reversion import bb_position
-        return bb_position(candles, self.params.reversion_period,
-                          float(self.params.reversion_std_dev))
+    def calculate_mean_reversion_signal(self, candles: pd.DataFrame) -> pd.Series:
+        """Bollinger position: -1.0 (lower band) to +1.0 (upper band) as Series"""
+        from shared.engine.gene_pool.mean_reversion import bb_position_series
+        return bb_position_series(candles, self.params.reversion_period,
+                                  float(self.params.reversion_std_dev))
 
-    def calculate_volatility_signal(self, candles: pd.DataFrame) -> float:
-        """ATR regime: +1.0 (high vol), 0.0 (normal), -1.0 (low vol)"""
-        from shared.engine.gene_pool.volatility import atr_regime
-        return atr_regime(candles, self.params.volatility_period)
+    def calculate_volatility_signal(self, candles: pd.DataFrame) -> pd.Series:
+        """ATR regime: +1.0 (high vol), 0.0 (normal), -1.0 (low vol) as Series"""
+        from shared.engine.gene_pool.volatility import atr_regime_series
+        return atr_regime_series(candles, self.params.volatility_period)
 
-    def calculate_volume_signal(self, candles: pd.DataFrame) -> float:
-        """Volume intensity: 0.0 (low) to +1.0 (high)"""
-        from shared.engine.gene_pool.volume import volume_intensity
-        return volume_intensity(candles, self.params.volume_period, 1.5)
+    def calculate_volume_signal(self, candles: pd.DataFrame) -> pd.Series:
+        """Volume intensity: 0.0 (low) to +1.0 (high) as Series"""
+        from shared.engine.gene_pool.volume import volume_intensity_series
+        return volume_intensity_series(candles, self.params.volume_period, 1.5)
 
-    # === FIXED AGGREGATION LOGIC (Never override) ===
+    # === FIXED AGGREGATION LOGIC (Vectorized, Regime-Switched) ===
 
-    def calculate_composite_signal(self, candles: pd.DataFrame) -> float:
+    def calculate_composite_signal(self, candles: pd.DataFrame) -> pd.Series:
         """
-        FIXED LOGIC: Weighted average of all enabled signals.
+        FIXED LOGIC: Regime-switched weighted average of all signals.
 
-        This is the core innovation - the STRUCTURE is fixed,
-        only the WEIGHTS are evolved.
+        Returns pd.Series of composite signal values (-1.0 to +1.0).
+        This is VECTORIZED - calculates entire history in one pass.
         """
-        signals = []
-        weights = []
+        # Calculate regime for each bar
+        is_regime_b = self.calculate_regime_indicator(candles)
 
-        signal_map = {
-            'trend': self.calculate_trend_signal,
-            'momentum': self.calculate_momentum_signal,
-            'mean_reversion': self.calculate_mean_reversion_signal,
-            'volatility': self.calculate_volatility_signal,
-            'volume': self.calculate_volume_signal,
+        # Get regime-dependent weights
+        w_trend, w_momentum, w_reversion, w_volatility, w_volume = self.get_active_weights(is_regime_b)
+
+        # Calculate all signal series (vectorized)
+        signals = {
+            'trend': self.calculate_trend_signal(candles),
+            'momentum': self.calculate_momentum_signal(candles),
+            'mean_reversion': self.calculate_mean_reversion_signal(candles),
+            'volatility': self.calculate_volatility_signal(candles),
+            'volume': self.calculate_volume_signal(candles),
         }
 
-        for name, calc_func in signal_map.items():
-            weight = getattr(self.params, f'weight_{name}')
-            if abs(weight) > 0.01:  # Skip disabled signals
-                try:
-                    signal_value = calc_func(candles)
-                    signals.append(signal_value)
-                    weights.append(weight)
-                except Exception:
-                    pass  # Skip failed signals
+        weights = {
+            'trend': w_trend,
+            'momentum': w_momentum,
+            'mean_reversion': w_reversion,
+            'volatility': w_volatility,
+            'volume': w_volume,
+        }
 
-        if not signals:
-            return 0.0
+        # Vectorized weighted sum
+        composite = pd.Series(0.0, index=candles.index)
+        total_weight = pd.Series(0.0, index=candles.index)
 
-        # Weighted average (weights can be negative for contrarian)
-        total_weight = sum(abs(w) for w in weights)
-        return sum(s * w for s, w in zip(signals, weights)) / total_weight
+        for name in signals:
+            w = weights[name]
+            s = signals[name]
+            # Only include where weight is significant
+            mask = w.abs() > 0.01
+            composite = composite + (s * w).where(mask, 0.0)
+            total_weight = total_weight + w.abs().where(mask, 0.0)
 
-    # === FIXED DECISION LOGIC (Never override) ===
+        # Avoid division by zero
+        total_weight = total_weight.replace(0.0, 1.0)
+        return composite / total_weight
 
-    def should_enter_long(self, candles: pd.DataFrame) -> bool:
+    # === FIXED DECISION LOGIC (Vectorized, Bidirectional) ===
+
+    def generate_signals(self, candles: pd.DataFrame) -> pd.DataFrame:
         """
-        FIXED LOGIC: Enter when market filter OK AND composite > threshold
+        Generate all trading signals for the entire candle history.
+
+        Returns DataFrame with columns:
+        - composite: The composite signal (-1 to +1)
+        - market_filter: The market filter value
+        - entry_long: Boolean, True where should enter long
+        - exit_long: Boolean, True where should exit long
+        - entry_short: Boolean, True where should enter short
+        - exit_short: Boolean, True where should exit short
         """
+        composite = self.calculate_composite_signal(candles)
         market_filter = self.calculate_market_filter(candles)
-        if market_filter < self.params.market_filter_threshold:
-            return False
 
-        composite = self.calculate_composite_signal(candles)
-        return composite > self.params.entry_threshold
+        signals = pd.DataFrame(index=candles.index)
+        signals['composite'] = composite
+        signals['market_filter'] = market_filter
 
-    def should_exit_long(self, candles: pd.DataFrame) -> bool:
-        """
-        FIXED LOGIC: Exit when composite drops below exit threshold
-        """
-        composite = self.calculate_composite_signal(candles)
-        return composite < self.params.exit_threshold
+        # Long signals (if enabled)
+        if self.params.allow_long:
+            signals['entry_long'] = (
+                (market_filter >= self.params.market_filter_threshold) &
+                (composite > self.params.entry_threshold_long)
+            )
+            signals['exit_long'] = composite < self.params.exit_threshold_long
+        else:
+            signals['entry_long'] = False
+            signals['exit_long'] = False
 
-    def get_stop_loss_distance(self, candles: pd.DataFrame) -> float:
-        """
-        FIXED LOGIC: Stop at N × ATR below entry
-        """
-        from shared.engine.gene_pool.volatility import get_atr
-        atr = get_atr(candles, 14)  # Fixed ATR period for stops
-        return atr * self.params.stop_loss_atr_mult
+        # Short signals (if enabled)
+        if self.params.allow_short:
+            signals['entry_short'] = (
+                (market_filter >= self.params.market_filter_threshold) &
+                (composite < self.params.entry_threshold_short)
+            )
+            signals['exit_short'] = composite > self.params.exit_threshold_short
+        else:
+            signals['entry_short'] = False
+            signals['exit_short'] = False
 
-    def get_take_profit_distance(self, candles: pd.DataFrame) -> float:
-        """
-        FIXED LOGIC: Take profit at M × ATR above entry
-        """
-        from shared.engine.gene_pool.volatility import get_atr
-        atr = get_atr(candles, 14)
-        return atr * self.params.take_profit_atr_mult
+        return signals
 
-    # === EXPLAIN (For analysis) ===
+    # === RISK (Vectorized) ===
 
-    def explain_signal(self, candles: pd.DataFrame) -> Dict:
+    def get_atr_series(self, candles: pd.DataFrame, period: int = 14) -> pd.Series:
+        """Get ATR series for stop/target calculations"""
+        from ta.volatility import AverageTrueRange
+        atr = AverageTrueRange(candles['high'], candles['low'], candles['close'], window=period)
+        return atr.average_true_range()
+
+    def get_stop_loss_distance(self, candles: pd.DataFrame) -> pd.Series:
+        """Stop at N × ATR - returns Series"""
+        return self.get_atr_series(candles) * self.params.stop_loss_atr_mult
+
+    def get_take_profit_distance(self, candles: pd.DataFrame) -> pd.Series:
+        """Take profit at M × ATR - returns Series"""
+        return self.get_atr_series(candles) * self.params.take_profit_atr_mult
+
+    # === EXPLAIN (For analysis at a single point) ===
+
+    def explain_signal_at(self, candles: pd.DataFrame, idx: int = -1) -> Dict:
         """
-        Returns breakdown of all signal contributions.
-        Useful for understanding WHY a strategy triggered.
+        Returns breakdown of signal contributions at a specific index.
+        Useful for understanding WHY a strategy triggered at a point.
         """
+        signals_df = self.generate_signals(candles)
+        is_regime_b = self.calculate_regime_indicator(candles)
+
+        # Get values at index
+        row = signals_df.iloc[idx]
+        regime = "B (Trending)" if is_regime_b.iloc[idx] else "A (Ranging)"
+        active_weights = self.params.weights_B if is_regime_b.iloc[idx] else self.params.weights_A
+
         breakdown = {
-            'market_filter': self.calculate_market_filter(candles),
-            'composite_signal': self.calculate_composite_signal(candles),
-            'signals': {},
-            'entry_decision': self.should_enter_long(candles),
-            'exit_decision': self.should_exit_long(candles),
+            'index': idx,
+            'timestamp': candles.index[idx] if hasattr(candles.index, '__getitem__') else idx,
+            'regime': regime,
+            'active_weights': active_weights.to_dict(),
+            'composite_signal': row['composite'],
+            'market_filter': row['market_filter'],
+            'entry_long': row['entry_long'],
+            'exit_long': row['exit_long'],
+            'entry_short': row['entry_short'],
+            'exit_short': row['exit_short'],
+            'signal_contributions': {},
         }
 
+        # Calculate individual contributions
         for name in ['trend', 'momentum', 'mean_reversion', 'volatility', 'volume']:
-            weight = getattr(self.params, f'weight_{name}')
+            weight = getattr(active_weights, name)
             if abs(weight) > 0.01:
-                calc_func = getattr(self, f'calculate_{name}_signal')
-                raw_signal = calc_func(candles)
-                weighted_signal = raw_signal * weight
-                breakdown['signals'][name] = {
+                signal_series = getattr(self, f'calculate_{name}_signal')(candles)
+                raw_signal = signal_series.iloc[idx]
+                breakdown['signal_contributions'][name] = {
                     'weight': weight,
                     'raw_signal': raw_signal,
-                    'weighted_contribution': weighted_signal,
+                    'weighted_contribution': raw_signal * weight,
                 }
 
         return breakdown
@@ -871,55 +1060,88 @@ class LegacyStrategyAdapter:
 ## Implementation Plan
 
 ### Phase 1: Schema & Validation (Week 1)
-- [ ] Define `StrategyParameters` dataclass with all universal parameters
+- [ ] Define `WeightVector` dataclass for signal weights
+- [ ] Define `UniversalParameters` dataclass with:
+  - [ ] Regime selector (indicator, period, threshold)
+  - [ ] Two weight vectors (weights_A, weights_B)
+  - [ ] Bidirectional thresholds (entry/exit for long AND short)
+  - [ ] Direction control flags (allow_long, allow_short)
 - [ ] Define `CryptoParameters` extension
 - [ ] Define `ForexParameters` extension
-- [ ] Implement parameter validation
+- [ ] Implement parameter validation (cross-parameter constraints)
 - [ ] Implement discretization utilities
 - [ ] Unit tests for validation
+- [ ] **Property-based testing with `hypothesis`** (per review recommendation)
 
-### Phase 2: Base Template (Week 1-2)
+### Phase 2: Vectorized Gene Pool Primitives (Week 1-2)
+- [ ] Implement `_series` versions of all primitives:
+  - [ ] `ema_trend_series()` → returns pd.Series
+  - [ ] `norm_rsi_series()` → returns pd.Series
+  - [ ] `bb_position_series()` → returns pd.Series
+  - [ ] `atr_regime_series()` → returns pd.Series
+  - [ ] `volume_intensity_series()` → returns pd.Series
+  - [ ] `atr_percentile_series()` → returns pd.Series
+- [ ] Unit tests verifying vectorized output matches scalar version
+- [ ] Performance benchmarks (vectorized vs loop)
+
+### Phase 3: Base Template (Week 2)
 - [ ] Implement `StrategyTemplate` abstract base class
-- [ ] Implement signal calculation methods
-- [ ] Implement composite signal aggregation (weighted average)
-- [ ] Implement entry/exit decision logic
-- [ ] Implement `explain_signal()` for debugging
+- [ ] Implement regime detection (`calculate_regime_indicator`)
+- [ ] Implement regime-switched weight selection (`get_active_weights`)
+- [ ] Implement vectorized signal calculation methods
+- [ ] Implement vectorized composite signal aggregation
+- [ ] Implement `generate_signals()` returning full DataFrame
+- [ ] Implement bidirectional entry/exit logic (long AND short)
+- [ ] Implement `explain_signal_at()` for debugging
 - [ ] Unit tests for template logic
+- [ ] **Verify entire signal series computed in one pass** (no loops over bars)
 
-### Phase 3: Asset Templates (Week 2)
+### Phase 4: Asset Templates (Week 2-3)
 - [ ] Implement `CryptoStrategyTemplate`
-  - [ ] Wire up market filter to `btc_trend()`
-  - [ ] Add BTC correlation signal
-  - [ ] Add funding rate signal (if data available)
+  - [ ] Vectorized market filter using `btc_trend_series()`
+  - [ ] Add BTC correlation signal (vectorized)
+  - [ ] Add funding rate signal if data available (vectorized)
 - [ ] Implement `ForexStrategyTemplate` (placeholder)
 - [ ] Integration tests with real candle data
+- [ ] Performance benchmark: signal generation for 10K candles
 
-### Phase 4: Evolution Integration (Week 2-3)
+### Phase 5: Evolution Integration (Week 3)
 - [ ] Update mutation prompts for parameter-only changes
+  - [ ] Include regime-specific weight mutations
+  - [ ] Include regime selector mutations (indicator, threshold)
+  - [ ] Include direction control mutations (enable/disable shorts)
 - [ ] Implement `mutate_parameters()` function
-- [ ] Implement `crossover_parameters()` function
+- [ ] Implement `crossover_parameters()` with constraint repair
 - [ ] Update `EvolutionEngine` to use templates
 - [ ] Add parameter history tracking (which params changed)
 - [ ] Integration tests for evolution loop
 
-### Phase 5: Fitness & Backtesting (Week 3)
+### Phase 6: Vectorized Backtesting (Week 3-4)
 - [ ] Update `MinimalBacktester` to accept `StrategyTemplate`
+- [ ] **Vectorized backtest loop** (no Python iteration over candles)
+  - [ ] Pre-compute all signals via `generate_signals()`
+  - [ ] Use vectorized entry/exit detection
+  - [ ] Vectorized position tracking
+- [ ] Support bidirectional backtesting (long AND short positions)
 - [ ] Verify fitness calculation works with templates
-- [ ] Benchmark: compare backtest speed (template vs string parsing)
+- [ ] **Benchmark: target 10x speedup over string parsing**
 - [ ] Verify regime testing works
 
-### Phase 6: Migration & Cleanup (Week 3-4)
-- [ ] Convert top 10 existing strategies to parameter form
-- [ ] Implement `LegacyStrategyAdapter` for old strategies
-- [ ] Update strategy persistence (`StrategyRecord`)
+### Phase 7: Migration & Cleanup (Week 4)
+- [ ] **Don't convert old strategies** (per review recommendation)
+- [ ] Implement `LegacyStrategyAdapter` for backward compatibility
+- [ ] Let new template system evolve from scratch
+- [ ] Allow both systems to compete in same portfolio
+- [ ] Update strategy persistence (`StrategyRecord`) for new schema
 - [ ] Update analysis tools
 - [ ] Documentation updates
 
-### Phase 7: Validation (Week 4)
+### Phase 8: Validation (Week 4-5)
 - [ ] Run parallel evolution: string-based vs template-based
 - [ ] Compare convergence speed
 - [ ] Compare strategy quality (Sharpe, robustness)
 - [ ] Compare LLM token usage (should be lower)
+- [ ] Compare backtest throughput (strategies/hour)
 - [ ] Make go/no-go decision on full migration
 
 ---
@@ -964,13 +1186,29 @@ Some discovered strategies might not be expressible as weighted averages (e.g., 
 
 **Current Recommendation:** Accept limitations initially. Monitor what strategies can't be expressed, add templates if pattern emerges.
 
-### 4. Should We Allow Short Strategies?
+### ~~4. Should We Allow Short Strategies?~~ ✅ RESOLVED
 
-Current system is long-only. Templates could support short:
-- `entry_short`: opposite of `entry_long` (flip signs)
-- `exit_short`: opposite of `exit_long`
+**Decision:** YES - Native short architecture built in from Day 1 (per review feedback).
 
-**Current Recommendation:** Defer until long-only is working well. Add as separate phase.
+- Composite signal is "directional intent" (-1 to +1)
+- Separate thresholds: `entry_threshold_long`, `entry_threshold_short`
+- `allow_long` / `allow_short` flags for control
+- Default: `allow_long=True, allow_short=False` (long-only by default)
+- No architectural changes needed to enable shorts later
+
+### 4. Should Regime Switching Be Optional?
+
+**Option A: Always regime-switched**
+- Every strategy has two weight sets
+- More parameters to evolve (2× weights)
+- Better adaptability
+
+**Option B: Optional regime switching**
+- Add `use_regime_switching: bool` parameter
+- If False, use only `weights_A`
+- Simpler strategies possible
+
+**Current Recommendation:** Always regime-switched. The complexity cost is low (2× weight parameters), and the performance gain is high. If we find strategies converge to identical weights_A and weights_B, that's fine - it effectively becomes a static strategy.
 
 ---
 
@@ -991,9 +1229,40 @@ Current system is long-only. Templates could support short:
 | Timestamp | Change | Author |
 |-----------|--------|--------|
 | 12/15/2025 09:14 AM PST | Initial plan created | Claude |
+| 12/15/2025 09:35 AM PST | Incorporated review feedback: vectorization, regime-switched weights, native short architecture | Claude |
 
 ---
 
-**Next Step:** Review this plan and decide on Open Questions before implementation.
+## Review Feedback Integration Summary
 
-**Estimated Implementation Time:** 3-4 weeks for full migration (but functional prototype in Week 2)
+The following changes were made based on the [peer review](2025-12-15-review-parameter-architecture.md):
+
+### 1. Vectorization (CRITICAL)
+- All signal calculations now return `pd.Series` instead of `float`
+- `generate_signals()` returns full DataFrame for entire candle history
+- Composite calculation uses vectorized numpy/pandas operations
+- Backtester will pre-compute all signals in one pass
+
+### 2. Regime-Switched Weights
+- Added `WeightVector` dataclass for signal weights
+- Added `weights_A` (ranging regime) and `weights_B` (trending regime)
+- Added regime selector: `regime_indicator`, `regime_period`, `regime_threshold`
+- Weights automatically switch based on ADX/ATR/BB-width
+
+### 3. Native Short Architecture
+- Composite signal now represents "directional intent" (-1 to +1)
+- Added bidirectional thresholds: `entry_threshold_long/short`, `exit_threshold_long/short`
+- Added direction control: `allow_long`, `allow_short` flags
+- Default: long-only (backward compatible)
+
+### 4. Migration Strategy
+- Per review: "Don't convert, compete"
+- Keep legacy string-based system running
+- Let new template system evolve from scratch
+- Both compete in same portfolio; winner emerges naturally
+
+---
+
+**Next Step:** Review this plan and decide on remaining Open Questions before implementation.
+
+**Estimated Implementation Time:** 4-5 weeks for full migration (functional prototype in Week 2-3)
