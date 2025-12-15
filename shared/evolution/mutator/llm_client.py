@@ -46,10 +46,10 @@ class LLMConfig:
         """
         if provider == LLMProvider.OPENAI:
             api_key = os.environ.get("OPENAI_API_KEY", "")
-            model = "gpt-4o-mini"  # GPT-4o-mini - cheaper, fast for JSON generation
+            model = "gpt-5-mini"  # GPT-5-mini - latest efficient model
         else:
             api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-            model = "claude-sonnet-4-5-20250514"  # Sonnet 4.5 - same cost as 4, better performance
+            model = "claude-haiku-4-5-20250514"  # Haiku 4.5 - fast & cheap for JSON generation
 
         return cls(
             provider=provider,
@@ -275,7 +275,7 @@ def create_default_client(log_dir: Optional[Path] = None) -> LLMClient:
     if anthropic_key:
         config = LLMConfig(
             provider=LLMProvider.ANTHROPIC,
-            model="claude-sonnet-4-5-20250514",  # Sonnet 4.5 - same cost as 4, better performance
+            model="claude-haiku-4-5-20250514",  # Haiku 4.5 - fast & cheap for JSON generation
             api_key=anthropic_key,
             log_dir=log_dir,
         )
@@ -286,7 +286,7 @@ def create_default_client(log_dir: Optional[Path] = None) -> LLMClient:
     if openai_key:
         config = LLMConfig(
             provider=LLMProvider.OPENAI,
-            model="gpt-4o-mini",  # GPT-4o-mini - cheaper, fast for JSON
+            model="gpt-5-mini",  # GPT-5-mini - latest efficient model
             api_key=openai_key,
             log_dir=log_dir,
         )
