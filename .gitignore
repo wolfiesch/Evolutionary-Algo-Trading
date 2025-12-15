@@ -42,9 +42,12 @@ logs/
 crypto/logs/
 forex/logs/
 
-# Claude session data
-.claude/data/sessions/
+# Claude Code config
+.claude/
 crypto/.claude/
+
+# Database backups
+*.db.old
 
 # Temporary review files
 /tmp/
