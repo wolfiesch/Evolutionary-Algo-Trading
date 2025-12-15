@@ -308,7 +308,11 @@ class EvolutionEngine:
         for strat in initial:
             fitness, _ = self.evaluator(strat)
             self._population.append((strat, fitness))
-            logger.info(f"  {strat.name}: Score={fitness.final_score:.3f}")
+            # Debug: Show reason for Score=0 strategies (includes soft-fails like negative Sharpe)
+            if fitness.final_score == 0.0 and fitness.disqualification_reason:
+                logger.info(f"  {strat.name}: Score=0.000 ({fitness.disqualification_reason})")
+            else:
+                logger.info(f"  {strat.name}: Score={fitness.final_score:.3f}")
 
             # Report progress
             self._report_progress(strat.name, fitness, phase="initial_population")
@@ -361,7 +365,13 @@ class EvolutionEngine:
                 fitness, _ = self.evaluator(offspring)
                 new_population.append((offspring, fitness))
 
-                status = "DISQUALIFIED" if fitness.disqualified else f"Score={fitness.final_score:.3f}"
+                # Debug: Show reason for Score=0 (includes soft-fails like negative Sharpe)
+                if fitness.final_score == 0.0 and fitness.disqualification_reason:
+                    status = f"Score=0.000 ({fitness.disqualification_reason})"
+                elif fitness.disqualified:
+                    status = "DISQUALIFIED"
+                else:
+                    status = f"Score={fitness.final_score:.3f}"
                 logger.info(f"Offspring: {offspring.name} - {status}")
 
                 # Report progress

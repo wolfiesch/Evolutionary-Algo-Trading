@@ -845,8 +845,6 @@ def run_full_evolution(
                     name=f"Seed_{seed_data.get('strategy_name', 'Unknown')}",
                     entry_long=seed_data.get('entry_long', ''),
                     exit_long=seed_data.get('exit_long', ''),
-                    entry_short=seed_data.get('entry_short'),
-                    exit_short=seed_data.get('exit_short'),
                     rationale=f"Transplanted from {seed_data.get('strategy_name', 'unknown source')} (Sharpe: {seed_data.get('backtest_sharpe', 'N/A')})",
                 )
                 logger.info(f"Loaded seed strategy: {seed_strategy.name}")

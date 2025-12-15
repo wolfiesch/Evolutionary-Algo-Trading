@@ -83,6 +83,10 @@ def calculate_fitness(backtest_results: BacktestResults) -> FitnessResult:
     capped_sharpe = min(base_sharpe, MAX_SHARPE_CAP)  # Cap at 3.0
     result.final_score = capped_sharpe * result.drawdown_multiplier
 
+    # Add soft-fail reason for debugging (not technically disqualified, but score=0)
+    if backtest_results.sharpe_ratio <= 0 and result.final_score == 0.0:
+        result.disqualification_reason = f"Negative Sharpe ratio: {backtest_results.sharpe_ratio:.2f}"
+
     return result
 
 
