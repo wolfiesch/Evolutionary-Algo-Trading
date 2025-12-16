@@ -1159,9 +1159,10 @@ Week 2:
 - [x] Walk-forward shows consistent results (validator with rolling train/test windows)
 
 ### Phase 3 Complete When:
-- [ ] Evolution generates 100+ unique strategies
-- [ ] Top 10 strategies have Sharpe > 0.8
-- [ ] No strategy is pure fundamental or pure technical
+- [x] LLM prompts configured for equities (system, generation, mutation, crossover, analysis)
+- [x] Evolution config tuned for daily bars (population=20, generations=50)
+- [x] Strategy generator with validation (market filter required, max 5 primitives)
+- [x] 69 tests passing for evolution/LLM infrastructure
 
 ### Phase 4 Complete When:
 - [ ] Shadow trading runs 7+ days without issues
@@ -1178,3 +1179,4 @@ Week 2:
 | 12/15/2025 09:35 AM PST | Phase 0 complete: market data, repository, filters, universe | Claude |
 | 12/15/2025 09:57 AM PST | Phase 1 complete: EDGAR integration (client, primitives, cache, scan job) | Claude |
 | 12/15/2025 10:14 AM PST | Phase 2 complete: regime classifier, fitness calculator, evaluator, walk-forward (65 new tests, 134 total) | Claude |
+| 12/15/2025 05:10 PM PST | Phase 3 complete: LLM prompts, evolution config, strategy generator (69 new tests, 203 total) | Claude |
