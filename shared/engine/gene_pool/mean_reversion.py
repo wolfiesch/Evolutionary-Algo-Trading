@@ -1,8 +1,117 @@
 """Mean reversion primitives for gene pool."""
 import pandas as pd
+import numpy as np
 from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands
 
+
+# === VECTORIZED VERSIONS (Return pd.Series) ===
+
+def norm_rsi_series(candles: pd.DataFrame, period: int) -> pd.Series:
+    """
+    Vectorized normalized RSI: (RSI - 50) / 50
+
+    Args:
+        candles: OHLCV DataFrame (oldest first)
+        period: RSI period (typically 14)
+
+    Returns:
+        pd.Series: -1.0 (oversold, RSI=0) to +1.0 (overbought, RSI=100)
+    """
+    # Calculate RSI using ta library
+    rsi_series = RSIIndicator(candles['close'], window=period).rsi()
+
+    # Normalize: (RSI - 50) / 50
+    normalized = (rsi_series - 50.0) / 50.0
+
+    # Clamp to [-1.0, 1.0] and fill NaN with 0.0
+    normalized = normalized.clip(-1.0, 1.0).fillna(0.0)
+
+    return normalized
+
+
+def bb_position_series(candles: pd.DataFrame, period: int, std: float) -> pd.Series:
+    """
+    Vectorized position within Bollinger Bands.
+
+    Args:
+        candles: OHLCV DataFrame
+        period: BB period (typically 20)
+        std: Standard deviation multiplier (typically 2.0)
+
+    Returns:
+        pd.Series: -1.0 (lower band) to +1.0 (upper band)
+    """
+    # Calculate Bollinger Bands using ta library
+    bb = BollingerBands(candles['close'], window=period, window_dev=std)
+
+    lower = bb.bollinger_lband()
+    middle = bb.bollinger_mavg()
+    upper = bb.bollinger_hband()
+
+    # Calculate half-width (upper - middle)
+    half_width = upper - middle
+
+    # Guard against zero width
+    safe_half_width = half_width.replace(0, np.nan)
+
+    # Calculate position: (close - middle) / half_width
+    position = (candles['close'] - middle) / safe_half_width
+
+    # Clamp to [-1.0, 1.0] and fill NaN with 0.0
+    position = position.clip(-1.0, 1.0).fillna(0.0)
+
+    return position
+
+
+def bb_width_percentile_series(candles: pd.DataFrame, period: int, lookback: int = 100) -> pd.Series:
+    """
+    Vectorized Bollinger Band width percentile vs rolling history.
+
+    Args:
+        candles: OHLCV DataFrame
+        period: BB period
+        lookback: Historical lookback for percentile calculation
+
+    Returns:
+        pd.Series: 0.0 (narrowest) to 1.0 (widest) in lookback window
+    """
+    # Calculate Bollinger Bands
+    bb = BollingerBands(candles['close'], window=period, window_dev=2.0)
+
+    # Calculate band width series
+    band_width = bb.bollinger_hband() - bb.bollinger_lband()
+
+    # Calculate rolling percentile rank
+    def rolling_percentile_rank(s: pd.Series) -> pd.Series:
+        """Calculate percentile rank of last value in each rolling window."""
+        result = pd.Series(index=s.index, dtype=float)
+        for i in range(len(s)):
+            if i < lookback - 1:
+                result.iloc[i] = 0.5  # Default for insufficient data
+            else:
+                window = s.iloc[i - lookback + 1:i + 1]
+                current = s.iloc[i]
+                if pd.isna(current) or window.isna().all():
+                    result.iloc[i] = 0.5
+                else:
+                    rank = (window < current).sum() / len(window.dropna())
+                    result.iloc[i] = rank
+        return result
+
+    # Use rolling rank (more efficient)
+    percentile = band_width.rolling(lookback).apply(
+        lambda x: (x < x.iloc[-1]).sum() / (len(x) - 1) if len(x) > 1 else 0.5,
+        raw=False
+    )
+
+    # Clamp to [0.0, 1.0] and fill NaN with 0.5
+    percentile = percentile.clip(0.0, 1.0).fillna(0.5)
+
+    return percentile
+
+
+# === SCALAR VERSIONS (Return single float for last bar) ===
 
 def norm_rsi(candles: pd.DataFrame, period: int) -> float:
     """

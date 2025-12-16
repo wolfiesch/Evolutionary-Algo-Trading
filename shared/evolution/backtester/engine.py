@@ -277,8 +277,9 @@ class MinimalBacktester:
         # Max drawdown
         results.max_drawdown = self._calculate_max_drawdown(equity_series)
 
-        # Sharpe ratio (annualized)
-        results.sharpe_ratio = self._calculate_sharpe(equity_series)
+        # Sharpe ratio (annualized) - use config timeframe for proper annualization
+        periods_per_year = int(525600 / self.config.timeframe_minutes)
+        results.sharpe_ratio = self._calculate_sharpe(equity_series, periods_per_year)
 
         # Timestamps
         if 'timestamp' in candles.columns:

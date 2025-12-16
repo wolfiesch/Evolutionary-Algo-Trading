@@ -46,6 +46,17 @@ from shared.evolution.mutator.analyzer import (
     StrategyAnalyzer,
     analyze_evolution_winners,
 )
+from shared.evolution.mutator.parameter_mutation import (
+    MutationResult,
+    mutate_parameters,
+    random_mutate_parameters,
+    crossover_parameters,
+    random_crossover_parameters,
+    generate_initial_parameters,
+    ParameterEvolutionState,
+    PARAMETER_MUTATION_SYSTEM_PROMPT,
+    PARAMETER_MUTATION_PROMPT,
+)
 
 __all__ = [
     # LLM Client
@@ -89,4 +100,14 @@ __all__ = [
     "StrategyAnalysis",
     "StrategyAnalyzer",
     "analyze_evolution_winners",
+    # Parameter Evolution (Phase 5)
+    "MutationResult",
+    "mutate_parameters",
+    "random_mutate_parameters",
+    "crossover_parameters",
+    "random_crossover_parameters",
+    "generate_initial_parameters",
+    "ParameterEvolutionState",
+    "PARAMETER_MUTATION_SYSTEM_PROMPT",
+    "PARAMETER_MUTATION_PROMPT",
 ]

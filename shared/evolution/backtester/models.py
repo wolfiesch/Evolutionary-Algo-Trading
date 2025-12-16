@@ -19,6 +19,8 @@ class BacktestConfig:
     max_total_exposure: float = 0.50   # 50% max total exposure
     stop_loss_pct: float = 0.03        # 3% stop-loss
     min_position_interval_bars: int = 5  # Min bars between new positions (throttle)
+    # T0 Fix: Timeframe support for Sharpe annualization
+    timeframe_minutes: int = 1         # 1=1min, 60=1H, 240=4H, 1440=1D
 
 
 @dataclass

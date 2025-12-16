@@ -1,8 +1,72 @@
 """Trend primitives for gene pool."""
 import pandas as pd
+import numpy as np
 from ta.trend import EMAIndicator
 from ta.volatility import AverageTrueRange
 
+
+# === VECTORIZED VERSIONS (Return pd.Series) ===
+
+def ema_trend_series(candles: pd.DataFrame, fast: int, slow: int) -> pd.Series:
+    """
+    Vectorized EMA crossover signal.
+
+    Args:
+        candles: OHLCV DataFrame with columns [open, high, low, close, volume]
+        fast: Fast EMA period (e.g., 9)
+        slow: Slow EMA period (e.g., 21)
+
+    Returns:
+        pd.Series: +1.0 where fast > slow (uptrend), -1.0 where fast < slow (downtrend)
+    """
+    # Calculate EMAs using ta library
+    fast_ema = EMAIndicator(candles['close'], window=fast).ema_indicator()
+    slow_ema = EMAIndicator(candles['close'], window=slow).ema_indicator()
+
+    # Vectorized comparison: +1 if fast > slow, -1 otherwise
+    signal = pd.Series(
+        np.where(fast_ema > slow_ema, 1.0, -1.0),
+        index=candles.index
+    )
+
+    # Set NaN where EMAs are NaN
+    signal = signal.where(fast_ema.notna() & slow_ema.notna(), 0.0)
+
+    return signal
+
+
+def price_position_series(candles: pd.DataFrame, period: int) -> pd.Series:
+    """
+    Vectorized price position relative to EMA, normalized by ATR.
+
+    Args:
+        candles: OHLCV DataFrame
+        period: EMA and ATR period
+
+    Returns:
+        pd.Series: (Price - EMA) / ATR, capped at ±3.0
+    """
+    # Calculate EMA and ATR using ta library
+    ema = EMAIndicator(candles['close'], window=period).ema_indicator()
+    atr = AverageTrueRange(
+        candles['high'], candles['low'], candles['close'], window=period
+    ).average_true_range()
+
+    # Calculate position: (close - ema) / atr
+    # Guard against zero ATR
+    safe_atr = atr.replace(0, np.nan)
+    position = (candles['close'] - ema) / safe_atr
+
+    # Cap at ±3.0
+    position = position.clip(-3.0, 3.0)
+
+    # Fill NaN with 0.0
+    position = position.fillna(0.0)
+
+    return position
+
+
+# === SCALAR VERSIONS (Return single float for last bar) ===
 
 def ema_trend(candles: pd.DataFrame, fast: int, slow: int) -> float:
     """
