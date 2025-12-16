@@ -263,10 +263,9 @@ def mutate_parameters(
 
     # Call LLM
     try:
-        response = llm_client.chat(
-            system_prompt=PARAMETER_MUTATION_SYSTEM_PROMPT,
-            user_prompt=prompt,
-        )
+        # Combine system and user prompts
+        full_prompt = f"{PARAMETER_MUTATION_SYSTEM_PROMPT}\n\n{prompt}"
+        response = llm_client.generate(full_prompt)
 
         mutation = parse_mutation_response(response)
         if mutation is None:
@@ -417,10 +416,9 @@ def crossover_parameters(
                 params_b_json=json.dumps(parent_b.to_dict(), indent=2),
             )
 
-            response = llm_client.chat(
-                system_prompt=PARAMETER_MUTATION_SYSTEM_PROMPT,
-                user_prompt=prompt,
-            )
+            # Combine system and user prompts
+            full_prompt = f"{PARAMETER_MUTATION_SYSTEM_PROMPT}\n\n{prompt}"
+            response = llm_client.generate(full_prompt)
 
             # Parse response as JSON
             start = response.find("{")
