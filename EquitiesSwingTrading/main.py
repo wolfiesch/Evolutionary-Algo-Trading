@@ -181,23 +181,8 @@ class EquitiesOrchestrator:
 
     def _get_default_strategies(self) -> list[Strategy]:
         """Get default development strategies."""
-        return [
-            Strategy(
-                name="Insider_Momentum",
-                entry_long="spy_trend(20) >= 0 AND insider_buy_intensity(90) > 0.3 AND ema_trend(9, 21) == 1.0",
-                exit_long="norm_rsi(14) > 0.6 OR ema_trend(9, 21) == -1.0",
-            ),
-            Strategy(
-                name="Quality_Pullback",
-                entry_long="spy_trend(20) >= 0 AND earnings_quality() > 0.5 AND norm_rsi(14) < -0.4 AND ema_trend(20, 50) == 1.0",
-                exit_long="norm_rsi(14) > 0.5",
-            ),
-            Strategy(
-                name="Growth_Breakout",
-                entry_long="spy_trend(20) >= 0 AND revenue_cagr(3) > 0.1 AND bb_position(20, 2.0) > 0.8",
-                exit_long="bb_position(20, 2.0) < 0.2 OR norm_rsi(14) > 0.7",
-            ),
-        ]
+        from strategies.seed_strategies import get_default_strategies
+        return get_default_strategies()
 
     def save_strategies(self, strategies: list[Strategy]) -> None:
         """Save strategies to disk."""
@@ -571,9 +556,56 @@ def run_status_command(args: argparse.Namespace) -> None:
 
 
 def run_evolve_command(args: argparse.Namespace) -> None:
-    """Run strategy evolution."""
-    print("Evolution not yet implemented. See Phase 3 in implementation plan.")
-    print("Coming soon: LLM-driven strategy generation and optimization.")
+    """Run strategy evolution and validation."""
+    from scripts.evolve_strategies import EvolutionRunner, list_strategies
+    from strategies.seed_strategies import get_default_strategies, ALL_STRATEGIES
+
+    # If no specific action, show menu
+    print("\n=== Strategy Evolution ===")
+    print("\nOptions:")
+    print("  python main.py evolve --list       List all strategies")
+    print("  python main.py evolve --backtest   Run backtests on strategies")
+    print("  python main.py evolve --validate   Run walk-forward validation")
+    print("\nOr use the full script:")
+    print("  python scripts/evolve_strategies.py backtest --quick")
+    print("  python scripts/evolve_strategies.py validate --strategy Insider_Momentum")
+
+    if hasattr(args, 'list') and args.list:
+        list_strategies()
+        return
+
+    if hasattr(args, 'backtest') and args.backtest:
+        # Quick backtest
+        cfg = get_config(args.env)
+        repository = EquitiesRepository(cfg.database.db_path)
+        runner = EvolutionRunner(repository)
+
+        symbols = repository.get_symbols_with_data()
+        if len(symbols) < 5:
+            print("\nInsufficient data. Run 'python main.py download --quick' first.")
+            return
+
+        spy, vix = runner.get_spy_vix_data(years=2)
+        candle_data = runner.get_historical_data(symbols[:10], years=2)
+
+        print(f"\nBacktesting {len(get_default_strategies())} default strategies...")
+        for strategy in get_default_strategies():
+            result = runner.run_portfolio_backtest(
+                strategy=strategy,
+                symbols=list(candle_data.keys()),
+                candle_data=candle_data,
+                spy_data=spy,
+                vix_data=vix,
+            )
+            if "error" not in result:
+                print(f"  {strategy.name}: Sharpe={result['avg_sharpe']:+.2f}, Trades={result['total_trades']}")
+        return
+
+    # Default: show available strategies
+    print(f"\nAvailable strategies: {len(ALL_STRATEGIES)}")
+    print("Default strategies for trading:")
+    for s in get_default_strategies():
+        print(f"  - {s.name}")
 
 
 def run_download_command(args: argparse.Namespace) -> None:
@@ -714,6 +746,23 @@ Examples:
         "--universe-only",
         action="store_true",
         help="Only download universe, skip SPY/VIX (download command)",
+    )
+
+    # Evolve command options
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        help="List all strategies (evolve command)",
+    )
+    parser.add_argument(
+        "--backtest",
+        action="store_true",
+        help="Run backtests (evolve command)",
+    )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="Run walk-forward validation (evolve command)",
     )
 
     args = parser.parse_args()
