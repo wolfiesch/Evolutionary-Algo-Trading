@@ -24,6 +24,22 @@ from execution.live.broker import (
     InsufficientFundsError,
     PositionNotFoundError,
 )
+from execution.live.alpaca_adapter import AlpacaAdapter
+from execution.live.trader import (
+    Signal,
+    LiveTraderConfig,
+    DailyStats,
+    LivePosition,
+    EquitiesLiveTrader,
+)
+from execution.live.watchdog import (
+    KillSwitchTrigger,
+    WatchdogState,
+    KillSwitchConfig,
+    KillSwitchEvent,
+    WatchdogStats,
+    RiskWatchdog,
+)
 
 __all__ = [
     # Enums
@@ -31,13 +47,28 @@ __all__ = [
     "OrderType",
     "OrderStatus",
     "TimeInForce",
-    # Data classes
+    "KillSwitchTrigger",
+    "WatchdogState",
+    # Broker data classes
     "Order",
     "BrokerPosition",
     "AccountInfo",
     "BracketOrderRequest",
+    # Trader data classes
+    "Signal",
+    "LiveTraderConfig",
+    "DailyStats",
+    "LivePosition",
+    # Watchdog data classes
+    "KillSwitchConfig",
+    "KillSwitchEvent",
+    "WatchdogStats",
     # Abstract base
     "BrokerAdapter",
+    # Implementations
+    "AlpacaAdapter",
+    "EquitiesLiveTrader",
+    "RiskWatchdog",
     # Exceptions
     "BrokerError",
     "BrokerConnectionError",
