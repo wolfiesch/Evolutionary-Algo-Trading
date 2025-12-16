@@ -1,0 +1,37 @@
+{
+    "strategy_name": "VWAP_Reversion_V1_M1",
+    "symbol": "SOLUSDT",
+    "validation_date": "2025-12-15",
+    "validation_method": "walk_forward_180_days_h4",
+
+    "entry_long": "btc_trend(60) >= 0 AND vwap_distance(20) < -1.0 AND norm_rsi(14) < -0.1",
+    "exit_long": "vwap_distance(20) > -0.2",
+
+    "performance": {
+        "walk_forward_score": 1.388,
+        "sharpe_ratio": 2.52,
+        "win_rate": 1.0,
+        "trade_count": 9,
+        "max_drawdown": 0.006,
+        "data_period_days": 180,
+        "timeframe": "H4"
+    },
+
+    "validation_criteria": {
+        "positive_sharpe": true,
+        "sufficient_trades": true,
+        "acceptable_drawdown": true,
+        "all_passed": true
+    },
+
+    "primitives_used": [
+        "btc_trend(period) - BTC market filter, returns >= 0 for bullish",
+        "vwap_distance(period) - Z-score distance from VWAP, < -1.0 = oversold",
+        "norm_rsi(period) - Normalized RSI (-1 to +1), < -0.1 = slightly oversold"
+    ],
+
+    "strategy_logic": "Mean reversion when SOL is significantly below VWAP during bullish BTC regime. Enter on oversold conditions, exit when price returns toward VWAP.",
+
+    "deployment_status": "ready_for_shadow_trading",
+    "notes": "T2 evolution result with 180-day data window. Outperformed ETH and BTC variants."
+}
