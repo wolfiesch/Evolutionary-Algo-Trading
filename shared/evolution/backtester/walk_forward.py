@@ -102,12 +102,16 @@ class WalkForwardValidator:
         all_trades: list[Trade] = []
         all_equity_points: list[float] = []
 
+        # Calculate minimum warmup based on test window size
+        # For 4H candles (42 bars = 7 days), we need at least 20 bars for indicators
+        min_warmup = min(20, self.wf_config.test_bars // 2)
+
         for train_start, train_end, test_start, test_end in windows:
             # Extract test window data
             test_candles = candles.iloc[test_start:test_end].reset_index(drop=True)
             test_benchmark = benchmark_candles.iloc[test_start:test_end].reset_index(drop=True)
 
-            if len(test_candles) < 60:  # Need warmup
+            if len(test_candles) < min_warmup:  # Need warmup (timeframe-aware)
                 continue
 
             # Run backtest on test window only

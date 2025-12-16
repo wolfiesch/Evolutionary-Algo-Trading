@@ -2,7 +2,7 @@
 LLM client wrapper - provider-agnostic interface.
 
 Supports OpenAI and Anthropic APIs with unified interface.
-Default: OpenAI GPT-5.2 Instant for cost efficiency.
+Default: OpenAI GPT-5 mini for cost efficiency.
 """
 import os
 import json
@@ -31,7 +31,7 @@ class LLMConfig:
     provider: LLMProvider
     model: str
     api_key: str
-    max_tokens: int = 300  # Reduced from 1024 - JSON responses are ~150-200 tokens
+    max_tokens: int = 500  # Sufficient for JSON strategy responses
     temperature: float = 0.7
     log_dir: Optional[Path] = None  # For interaction logging
 
@@ -46,7 +46,7 @@ class LLMConfig:
         """
         if provider == LLMProvider.OPENAI:
             api_key = os.environ.get("OPENAI_API_KEY", "")
-            model = "gpt-5-mini"  # GPT-5-mini - latest efficient model
+            model = "gpt-5-mini"  # GPT-5 mini - cost-effective for strategy generation
         else:
             api_key = os.environ.get("ANTHROPIC_API_KEY", "")
             model = "claude-haiku-4-5-20251001"  # Haiku 4.5 - fast & cheap for JSON generation
@@ -161,14 +161,16 @@ class OpenAIClient(LLMClient):
         """Call OpenAI API."""
         client = self._get_client()
 
-        response = client.chat.completions.create(
-            model=self.config.model,
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=self.config.max_tokens,
-            temperature=self.config.temperature,
-        )
+        # GPT-5.x models don't support custom temperature
+        params = {
+            "model": self.config.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_completion_tokens": self.config.max_tokens,
+        }
+        if not self.config.model.startswith("gpt-5"):
+            params["temperature"] = self.config.temperature
+
+        response = client.chat.completions.create(**params)
 
         return response.choices[0].message.content
 
@@ -286,7 +288,7 @@ def create_default_client(log_dir: Optional[Path] = None) -> LLMClient:
     if openai_key:
         config = LLMConfig(
             provider=LLMProvider.OPENAI,
-            model="gpt-5-mini",  # GPT-5-mini - latest efficient model
+            model="gpt-5-mini",  # GPT-5 mini - cost-effective for strategy generation
             api_key=openai_key,
             log_dir=log_dir,
         )
@@ -336,15 +338,14 @@ def create_analysis_client(log_dir: Optional[Path] = None) -> LLMClient:
         )
         return AnthropicClient(config)
 
-    # Try OpenAI GPT-4o
+    # Try OpenAI GPT-5 for complex analysis
     openai_key = os.environ.get("OPENAI_API_KEY")
     if openai_key:
         config = LLMConfig(
             provider=LLMProvider.OPENAI,
-            model="gpt-4o",  # GPT-4o - strong reasoning
+            model="gpt-5-mini",  # GPT-5 mini - cost-effective for analysis
             api_key=openai_key,
             max_tokens=2000,
-            temperature=0.3,
             log_dir=log_dir,
         )
         return OpenAIClient(config)

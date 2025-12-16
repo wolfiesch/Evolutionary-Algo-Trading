@@ -1,0 +1,8 @@
+{
+    "strategy_name": "TrendFollowing_EMA_V1",
+    "rationale": "ProFiT-style seed: Classic EMA crossover with trend confirmation. Ride strong trends with proper exits.",
+    "entry_long": "btc_trend(60) >= 0 AND ema_trend(9,21) == 1.0 AND price_position(14) > 0.5",
+    "exit_long": "ema_trend(9,21) == -1.0 OR price_position(14) < -1.0",
+    "source": "ProFiT paper methodology - trend following pattern",
+    "category": "trend"
+}
