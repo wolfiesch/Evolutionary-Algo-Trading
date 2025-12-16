@@ -246,7 +246,7 @@ def run_template_evolution(
         friction_per_side=0.0025,
         max_position_pct=0.10,
         stop_loss_pct=0.03,
-        timeframe_minutes=tf_config.minutes,
+        timeframe_minutes=tf_config.timeframe.value,
     )
     backtester = TemplateBacktester(backtest_config)
 
@@ -258,7 +258,7 @@ def run_template_evolution(
         min_windows=3,
     )
     wf_validator = WalkForwardValidator(BacktestConfig(
-        timeframe_minutes=tf_config.minutes,
+        timeframe_minutes=tf_config.timeframe.value,
         friction_per_side=0.0025,
     ), wf_config)
 
