@@ -1,0 +1,9 @@
+{
+    "strategy_name": "Seed_ETH_VWAP_Reversion_V1",
+    "symbol": "ETHUSDT",
+    "entry_long": "btc_trend(60) >= 0 AND vwap_distance(20) < -1.0 AND norm_rsi(14) < -0.1",
+    "exit_long": "vwap_distance(20) > -0.2",
+    "backtest_sharpe": 2.52,
+    "source": "Transplanted from SOL VWAP Reversion winner",
+    "rationale": "Mean reversion when ETH is significantly below VWAP during bullish BTC regime. Same pattern that worked for SOL should work for ETH as it's also an altcoin that follows BTC."
+}
