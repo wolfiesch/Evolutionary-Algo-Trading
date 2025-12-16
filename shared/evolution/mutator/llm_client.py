@@ -161,12 +161,20 @@ class OpenAIClient(LLMClient):
         """Call OpenAI API."""
         client = self._get_client()
 
-        # GPT-5.x models don't support custom temperature
+        # GPT-5.x models use reasoning tokens internally, need higher max_completion_tokens
+        # to leave room for actual output after reasoning completes
+        max_tokens = self.config.max_tokens
+        if self.config.model.startswith("gpt-5"):
+            # GPT-5 typically uses 200-500 tokens for reasoning, need buffer for output
+            max_tokens = max(max_tokens, 2000)
+
         params = {
             "model": self.config.model,
             "messages": [{"role": "user", "content": prompt}],
-            "max_completion_tokens": self.config.max_tokens,
+            "max_completion_tokens": max_tokens,
         }
+
+        # GPT-5.x models don't support custom temperature
         if not self.config.model.startswith("gpt-5"):
             params["temperature"] = self.config.temperature
 
