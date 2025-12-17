@@ -115,6 +115,75 @@ The LLM successfully:
 
 ---
 
+## SOL/BTC Underperformance Investigation (T1)
+
+**Investigation Date:** 12/17/2025 09:31 AM PST (via pst-timestamp)
+
+### Root Cause Analysis
+
+Comparing evolution logs across all three assets:
+
+| Metric | ETH (Success) | SOL (Fail) | BTC (Fail) |
+|--------|---------------|------------|------------|
+| Final Sharpe | **+1.32** | -0.50 | -5.20 |
+| Trade Count | **21** | 41 | 88 |
+| Threshold Evolution | 0.15 → **0.60** | 0.15 (stuck) | 0.15 (stuck) |
+| Best Gen Found | Gen 5 | Gen 1 | Gen 1 |
+| Explored Range | -3.68 to +1.32 | -0.50 only | -2.90 to -6.34 |
+
+### Key Finding: Evolution Stagnation
+
+**SOL and BTC evolution NEVER escaped their initial configuration:**
+- Parameters remained at seed values for all 15 generations
+- LLM mutations failed to find better parameter combinations
+- Population converged to local minimum immediately
+
+**ETH found the breakthrough by:**
+- Increasing entry threshold 4x (0.15 → 0.60)
+- Reducing trade frequency from ~100 to 21 (80% reduction)
+- Finding contrarian volume signal in trending regime
+
+### Why SOL/BTC Failed
+
+1. **Over-trading**: SOL=41 trades, BTC=88 trades vs ETH's 21 winning trades
+2. **Low selectivity**: 0.15 threshold generated too many low-quality signals
+3. **No parameter exploration**: LLM didn't discover higher threshold = better
+4. **BTC in downtrend**: Long-only strategy in -50% market period
+5. **Different market dynamics**: Template optimized for ETH's volatility profile
+
+### Evidence from Evolution Logs
+
+**BTC Gen 13** showed improvement hints:
+- Sharpe: -2.90 (improved from -5.20)
+- Trade count: 22 (similar to ETH's 21)
+- This suggests fewer trades = better, but evolution didn't pursue this direction
+
+### Recommendations for SOL/BTC
+
+#### Option 1: Use ETH Parameters as Seed (T0)
+```bash
+python3 crypto/evolve_template.py --symbol=SOLUSDT --entry-threshold=0.60 --generations=15
+python3 crypto/evolve_template.py --symbol=BTCUSDT --entry-threshold=0.60 --generations=15
+```
+
+#### Option 2: Enable Shorts for BTC (T1)
+- BTC was in -50% downtrend during backtest period
+- Long-only strategy cannot profit in sustained downtrends
+- Add `--enable-shorts` flag for BTC evolution
+
+#### Option 3: Different Indicators for BTC (T2)
+- BTC may need different primitives (e.g., on-chain data)
+- Consider BTC dominance, funding rates as primary signals
+- Template design may not suit BTC's institutional dynamics
+
+#### Option 4: Explicit Mutation Guidance (T1)
+- Update LLM mutation prompt to explicitly suggest:
+  - "Try increasing entry_threshold_long to 0.5-0.8"
+  - "Reduce trade frequency for better signal quality"
+  - "Consider contrarian volume weights"
+
+---
+
 ## Recommendations
 
 ### Immediate (T0)
@@ -164,6 +233,8 @@ As of 12/17/2025 06:47 AM PST:
 | 12/17/2025 06:43 AM PST | Low threshold runs complete, ETH winner found |
 | 12/17/2025 07:02 AM PST | Findings documented |
 | 12/17/2025 09:22 AM PST | Template shadow trader deployed for ETH H1 strategy validation |
+| 12/17/2025 09:25 AM PST | Fixed CandleRepository.get_candles → get_range bug |
+| 12/17/2025 09:31 AM PST | SOL/BTC underperformance investigation complete (T1) |
 
 ---
 
