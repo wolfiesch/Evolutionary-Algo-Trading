@@ -1,5 +1,9 @@
 # Equities Swing Trading System - Dependencies
 
+# Broker APIs
+alpaca-py>=0.21.0          # Alpaca Trading API for equities
+ibapi>=9.81.1              # Interactive Brokers TWS API for futures
+
 # Market Data
 yfinance>=0.2.36
 pandas>=2.0.0
