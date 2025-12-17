@@ -10,17 +10,26 @@
 
 ## Why We're Doing This
 
-We ran LLM-driven evolutionary strategy search and found two winning strategies:
+We ran LLM-driven evolutionary strategy search and found winning strategies:
 
-1. **SOL VWAP Reversion V1** (Sharpe 2.52)
+1. **SOL VWAP Reversion V1** (Sharpe 2.52) - Gene Expression
    - Mean reversion on VWAP dips in BTC uptrend
    - 100% win rate on backtest (9 trades)
    - Works because SOL had +54% period return
 
-2. **Momentum Continuation V1** (Sharpe 2.73)
+2. **Momentum Continuation V1** (Sharpe 2.73) - Gene Expression
    - Buy pullbacks in confirmed uptrends with volume
    - 47.8% win rate, 69 trades
    - Trend-following approach
+
+3. **ETH H1 Evolved V1** (Sharpe 1.32) - **NEW** Template Strategy
+   - Template-based evolution (parameters evolved, not gene expressions)
+   - 76.2% win rate on backtest (21 trades)
+   - Entry threshold evolved to 0.60 (LLM found more selective = better)
+   - H1 timeframe (60-minute candles)
+   - Contrarian volume signal (negative weight in trending regime)
+   - File: `winning_strategies/eth_h1_evolved_v1.json`
+   - Runner: `python3 run_template_shadow.py --strategy=winning_strategies/eth_h1_evolved_v1.json`
 
 The 7-day incubation validates these strategies work on LIVE data before risking real money.
 
@@ -43,11 +52,24 @@ The 7-day incubation validates these strategies work on LIVE data before risking
     - ENTRY_LONG SOLUSDT @ $128.82 (evo_20251214_winner_btc)
     - ENTRY_LONG ETHUSDT @ $2,958.34 (sol_vwap_reversion_v1)
 
-### Day 2
-- [ ] First trade entries expected
-- Trades:
-- P&L:
+### Day 2 (12/17/2025)
+- [x] ETH H1 Template Strategy added to incubation
+- [x] Template shadow trader infrastructure created
+- [ ] ETH strategy running in shadow mode (PENDING SCREEN SETUP)
 - Notes:
+  - Created `execution/shadow/template_trader.py` for template-based strategies
+  - Created `run_template_shadow.py` for standalone template validation
+  - ETH strategy successfully loads and connects to WebSocket
+  - H1 timeframe aggregation implemented (60 1m candles -> 1 H1 candle)
+  - Strategy parameters validated: entry_threshold=0.60, Sharpe=1.32, WR=76.2%
+
+**To start ETH template shadow trading:**
+```bash
+screen -S eth_shadow
+cd /Users/wolfgangschoenberger/Projects/Oil-Stonks
+python3 crypto/run_template_shadow.py --strategy=winning_strategies/eth_h1_evolved_v1.json
+# Ctrl+A, D to detach
+```
 
 ### Day 3
 - [ ] Mid-week checkpoint
@@ -101,6 +123,7 @@ The 7-day incubation validates these strategies work on LIVE data before risking
 
 ## Key Commands
 
+### Gene Expression Pool (Original)
 **Check status:**
 ```bash
 tail -f crypto/logs/shadow_trades.jsonl | jq
@@ -120,6 +143,24 @@ print(json.dumps(pool.get_stats(), indent=2))
 ```bash
 # Ctrl+C in terminal running main.py
 # Or: pkill -f "python.*main.py.*shadow-pool"
+```
+
+### Template Shadow Trading (ETH H1 Strategy)
+**Start ETH template shadow:**
+```bash
+screen -S eth_shadow
+python3 crypto/run_template_shadow.py --strategy=winning_strategies/eth_h1_evolved_v1.json
+# Ctrl+A, D to detach
+```
+
+**Check ETH trades:**
+```bash
+tail -f crypto/logs/shadow_trades.jsonl | jq 'select(.strategy_type == "template")'
+```
+
+**Stop ETH shadow:**
+```bash
+pkill -f "run_template_shadow"
 ```
 
 ---
@@ -173,4 +214,4 @@ BTC mean reversion failed because BTC was in a downtrend (-50%).
 
 ---
 
-**Last Updated**: 12/16/2025 03:16 PM PST (Day 1 - LIVE)
+**Last Updated**: 12/17/2025 09:22 AM PST (via pst-timestamp) - Day 2 - ETH Template Strategy Added
