@@ -275,8 +275,11 @@ def run_template_evolution(
     logger.info(f"Generating initial population of {population_size}...")
 
     # Create seed parameters
+    # Entry threshold lowered from 0.30 to 0.15 to increase trade frequency
     seed_params = CryptoParameters(
         allow_short=enable_shorts,
+        entry_threshold_long=0.15,  # Default was 0.30 - too restrictive
+        exit_threshold_long=-0.05,  # Slightly tighter exit
         weights_A=WeightVector(
             trend=0.2, momentum=0.3, mean_reversion=0.6, volatility=0.1, volume=0.1
         ),
