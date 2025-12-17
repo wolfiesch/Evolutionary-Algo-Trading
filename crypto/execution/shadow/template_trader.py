@@ -242,10 +242,10 @@ class TemplateShadowTrader:
         end_time = latest_candle.get("timestamp", int(datetime.utcnow().timestamp() * 1000))
         start_time = end_time - (200 * self.timeframe_minutes * 60 * 1000)  # 200 bars back
 
-        raw_candles = repo.get_candles(
+        raw_candles = repo.get_range(
             symbol=symbol,
-            start_time=start_time,
-            end_time=end_time,
+            start_ts=start_time,
+            end_ts=end_time,
         )
 
         if not raw_candles:

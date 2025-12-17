@@ -150,10 +150,10 @@ class TemplateShadowRunner:
         now = int(datetime.utcnow().timestamp() * 1000)
         start = now - (200 * 60 * 1000)  # 200 1m bars
 
-        candles = self.repository.get_candles(
+        candles = self.repository.get_range(
             symbol="BTCUSDT",
-            start_time=start,
-            end_time=now,
+            start_ts=start,
+            end_ts=now,
         )
 
         if not candles:
