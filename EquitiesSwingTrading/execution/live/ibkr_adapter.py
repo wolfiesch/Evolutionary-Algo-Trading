@@ -905,6 +905,10 @@ class IBKRAdapter(BrokerAdapter):
         }
         ib_order.tif = tif_map.get(order.time_in_force, "DAY")
 
+        # Required for IBKR API compatibility
+        ib_order.eTradeOnly = False
+        ib_order.firmQuoteOnly = False
+
         return ib_order
 
     def _parse_order_type(self, ib_type: str) -> OrderType:
