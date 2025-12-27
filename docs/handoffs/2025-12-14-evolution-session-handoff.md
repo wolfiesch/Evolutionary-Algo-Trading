@@ -215,14 +215,6 @@ python3 /tmp/test_transplant.py  # (file exists from this session)
 
 ---
 
-## API Keys (User Provided This Session)
-
-- **Anthropic**: `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` (exhausted)
-- **Gemini**: `AIzaSyBi0ojz_f7l28v3TytoXqPTYKeyqvdWpvI` (free tier exhausted)
-- **OpenAI**: Using env var (exhausted)
-
----
-
 ## Session Insights from Gemini Review
 
 Gemini provided critique on our approach:
