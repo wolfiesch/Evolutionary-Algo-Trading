@@ -10,6 +10,7 @@ Usage:
     python evolve.py --generations=3 --portfolio                      # Multi-symbol portfolio
     python evolve.py --generations=3 --symbol=SOLUSDT --walkforward  # Walk-forward validation
     python evolve.py --generations=10 --full                          # Phase 2D full evolution engine
+    python evolve.py --generations=10 --full --analyze                # + Opus analysis of winners
 
 Requirements:
     - OPENAI_API_KEY or ANTHROPIC_API_KEY environment variable
@@ -37,6 +38,8 @@ from shared.evolution.backtester import (
     WalkForwardValidator,
     WalkForwardConfig,
     walk_forward_fitness,
+    DataSnapshot,
+    create_run_snapshot,
 )
 from shared.evolution.fitness import (
     calculate_fitness,
@@ -56,6 +59,9 @@ from shared.evolution.mutator import (
     EvolutionConfig,
     EvolutionEngine,
     CrossoverOperator,
+    # Strategy Analyzer (Opus-powered)
+    StrategyAnalyzer,
+    analyze_evolution_winners,
 )
 
 # Configure logging with unbuffered handlers for real-time visibility
@@ -362,6 +368,7 @@ def run_evolution(
     use_portfolio: bool = False,
     use_walkforward: bool = False,
     portfolio_symbols: list[str] = None,
+    market_filter_override: str = None,
 ):
     """
     Run the evolution loop.
@@ -439,7 +446,7 @@ def run_evolution(
 
     # Load benchmark candles (BTC)
     logger.info("Loading benchmark candles (BTCUSDT)...")
-    btc_candles = repo.get_latest("BTCUSDT", limit=35000)  # ~24 days of 1-min data
+    btc_candles = repo.get_latest("BTCUSDT", limit=260000)  # ~180 days of 1-min data
     if len(btc_candles) < 80:
         # [*TO-DO*] - Increase to 200+ when more data is available
         logger.error(f"Insufficient BTC data: {len(btc_candles)} candles (need 80+)")
@@ -452,7 +459,7 @@ def run_evolution(
         candles_dict: dict[str, pd.DataFrame] = {}
         for sym in portfolio_symbols:
             logger.info(f"Loading candles for {sym}...")
-            sym_candles = repo.get_latest(sym, limit=35000)  # ~24 days of 1-min data
+            sym_candles = repo.get_latest(sym, limit=260000)  # ~180 days of 1-min data
             if len(sym_candles) < 80:
                 logger.warning(f"Insufficient data for {sym}: {len(sym_candles)} candles (need 80+), skipping")
                 continue
@@ -468,7 +475,7 @@ def run_evolution(
     else:
         # Single symbol mode
         logger.info(f"Loading candles for {symbol}...")
-        symbol_candles = repo.get_latest(symbol, limit=35000)  # ~24 days of 1-min data
+        symbol_candles = repo.get_latest(symbol, limit=260000)  # ~180 days of 1-min data
         if len(symbol_candles) < 80:
             # [*TO-DO*] - Increase to 200+ when more data is available
             logger.error(f"Insufficient data for {symbol}: {len(symbol_candles)} candles (need 80+)")
@@ -511,8 +518,8 @@ def run_evolution(
         logger.error(f"LLM initialization failed: {e}")
         return
 
-    # Initialize generator with self-referential market filter
-    market_filter = get_market_filter_name(symbol)
+    # Initialize generator with self-referential market filter (or override)
+    market_filter = market_filter_override or get_market_filter_name(symbol)
     logger.info(f"Using market filter: {market_filter}")
 
     generator = StrategyGenerator(
@@ -676,6 +683,11 @@ def run_full_evolution(
     progress_file: Path = None,
     custom_themes: list[str] = None,
     seed_strategy_path: Path = None,
+    market_filter_override: str = None,
+    create_snapshot: bool = False,
+    use_snapshot: str = None,
+    snapshot_dir: Path = None,
+    use_walkforward: bool = False,
 ):
     """
     Run Phase 2D full evolution with the EvolutionEngine.
@@ -695,6 +707,11 @@ def run_full_evolution(
         progress_file: Optional path to JSON file for progress polling
         custom_themes: Optional list of strategy themes to use instead of defaults
         seed_strategy_path: Path to JSON file with seed strategy for genetic transplantation
+        market_filter_override: Override market filter primitive
+        create_snapshot: If True, save data snapshot at run start
+        use_snapshot: Snapshot ID to load data from (overrides db_path)
+        snapshot_dir: Directory for snapshots (default: crypto/data/snapshots)
+        use_walkforward: If True, use walk-forward validation for fitness evaluation
     """
     if db_path is None:
         # Use main database (settings.sqlite_path), fall back to cloud DB
@@ -710,6 +727,9 @@ def run_full_evolution(
     if checkpoint_dir is None:
         checkpoint_dir = log_dir / "checkpoints"
 
+    if snapshot_dir is None:
+        snapshot_dir = Path(__file__).parent / "data" / "snapshots"
+
     logger.info("=" * 60)
     logger.info("PHASE 2D: FULL EVOLUTION ENGINE")
     logger.info("=" * 60)
@@ -720,15 +740,17 @@ def run_full_evolution(
     logger.info(f"Checkpoint dir: {checkpoint_dir}")
     if resume_from:
         logger.info(f"Resuming from: {resume_from}")
+    if use_snapshot:
+        logger.info(f"Using snapshot: {use_snapshot}")
+    elif create_snapshot:
+        logger.info(f"Snapshot: ENABLED (will freeze data at run start)")
+    logger.info(f"Walk-forward: {'ENABLED' if use_walkforward else 'DISABLED'}")
     logger.info("=" * 60)
 
     # Initialize components
     logger.info("Initializing components...")
 
-    # Repository
-    repo = CandleRepository(db_path)
-
-    # Convert to DataFrames
+    # Convert to DataFrames helper
     def candles_to_df(candles):
         return pd.DataFrame([{
             'open': c.open,
@@ -739,21 +761,47 @@ def run_full_evolution(
             'timestamp': c.timestamp,
         } for c in candles])
 
-    # Load candles
-    logger.info("Loading candles...")
-    btc_candles = repo.get_latest("BTCUSDT", limit=35000)  # ~24 days of 1-min data
-    if len(btc_candles) < 80:
-        logger.error(f"Insufficient BTC data: {len(btc_candles)} candles (need 80+)")
-        return
+    # Load data - either from snapshot or database
+    if use_snapshot:
+        # Load from existing snapshot
+        logger.info(f"Loading from snapshot: {use_snapshot}")
+        snapshot = DataSnapshot.load(use_snapshot, snapshot_dir)
+        if snapshot is None:
+            logger.error(f"Failed to load snapshot: {use_snapshot}")
+            return
+        btc_df = snapshot.benchmark
+        symbol_df = snapshot.candles
+        logger.info(f"Loaded snapshot: {len(symbol_df)} {symbol} candles, {len(btc_df)} BTC candles")
+    else:
+        # Load from database
+        repo = CandleRepository(db_path)
 
-    symbol_candles = repo.get_latest(symbol, limit=35000)  # ~24 days of 1-min data
-    if len(symbol_candles) < 80:
-        logger.error(f"Insufficient {symbol} data: {len(symbol_candles)} candles (need 80+)")
-        return
+        logger.info("Loading candles...")
+        btc_candles = repo.get_latest("BTCUSDT", limit=260000)  # ~180 days of 1-min data
+        if len(btc_candles) < 80:
+            logger.error(f"Insufficient BTC data: {len(btc_candles)} candles (need 80+)")
+            return
 
-    btc_df = candles_to_df(btc_candles)
-    symbol_df = candles_to_df(symbol_candles)
-    logger.info(f"Loaded {len(symbol_df)} {symbol} candles, {len(btc_df)} BTC candles")
+        symbol_candles = repo.get_latest(symbol, limit=260000)  # ~180 days of 1-min data
+        if len(symbol_candles) < 80:
+            logger.error(f"Insufficient {symbol} data: {len(symbol_candles)} candles (need 80+)")
+            return
+
+        btc_df = candles_to_df(btc_candles)
+        symbol_df = candles_to_df(symbol_candles)
+        logger.info(f"Loaded {len(symbol_df)} {symbol} candles, {len(btc_df)} BTC candles")
+
+        # Create snapshot if requested
+        if create_snapshot:
+            logger.info("Creating data snapshot for reproducibility...")
+            snapshot = create_run_snapshot(
+                candles_df=symbol_df,
+                benchmark_df=btc_df,
+                symbol=symbol,
+                snapshot_dir=snapshot_dir,
+            )
+            logger.info(f"Snapshot ID: {snapshot.metadata.snapshot_id}")
+            logger.info(f"  Use --use-snapshot={snapshot.metadata.snapshot_id} to reproduce this run")
 
     # Initialize backtester
     backtest_config = BacktestConfig(
@@ -765,6 +813,18 @@ def run_full_evolution(
     backtester = MinimalBacktester(backtest_config)
     parser = GeneExpressionParser()
 
+    # Initialize walk-forward validator if enabled
+    wf_validator = None
+    if use_walkforward:
+        wf_config = WalkForwardConfig(
+            train_bars=2000,  # ~1.4 days training
+            test_bars=500,    # ~8 hours test
+            step_bars=500,    # Step by ~8 hours
+            min_windows=3,    # Need at least 3 windows
+        )
+        wf_validator = WalkForwardValidator(backtest_config, wf_config)
+        logger.info(f"Walk-forward config: train={wf_config.train_bars}, test={wf_config.test_bars}, step={wf_config.step_bars}")
+
     # Initialize LLM
     logger.info("Initializing LLM client...")
     try:
@@ -774,8 +834,8 @@ def run_full_evolution(
         logger.error(f"LLM initialization failed: {e}")
         return
 
-    # Initialize generator and crossover with self-referential market filter
-    market_filter = get_market_filter_name(symbol)
+    # Initialize generator and crossover with self-referential market filter (or override)
+    market_filter = market_filter_override or get_market_filter_name(symbol)
     logger.info(f"Using market filter: {market_filter}")
 
     generator = StrategyGenerator(
@@ -787,20 +847,45 @@ def run_full_evolution(
         market_filter_name=market_filter,
     )
 
-    # Create evaluation function
+    # Create evaluation function (supports both standard and walk-forward modes)
     def eval_strategy(generated: GeneratedStrategy) -> tuple[FitnessResult, dict]:
         try:
             strategy = parser.parse(generated.to_dict())
             evaluator = create_evaluator(strategy, parser)
 
-            results = backtester.run(
-                evaluator=evaluator,
-                candles=symbol_df,
-                benchmark_candles=btc_df,
-                symbol=symbol,
-            )
-            fitness = calculate_fitness(results)
-            return fitness, results.summary()
+            if use_walkforward and wf_validator:
+                # Walk-forward validation mode
+                wf_results = wf_validator.validate(
+                    evaluator=evaluator,
+                    candles=symbol_df,
+                    benchmark_candles=btc_df,
+                    symbol=symbol,
+                )
+                score, is_valid, reason = walk_forward_fitness(wf_results)
+                fitness = FitnessResult(
+                    sharpe_ratio=wf_results.avg_sharpe,
+                    trade_count=wf_results.aggregated.trade_count if wf_results.aggregated else 0,
+                    win_rate=wf_results.avg_win_rate,
+                    total_return=wf_results.avg_return,
+                    max_drawdown=wf_results.aggregated.max_drawdown if wf_results.aggregated else 0,
+                )
+                if not is_valid:
+                    fitness.disqualified = True
+                    fitness.disqualification_reason = reason
+                    fitness.final_score = 0.0
+                else:
+                    fitness.final_score = score
+                return fitness, wf_results.summary()
+            else:
+                # Standard backtester mode
+                results = backtester.run(
+                    evaluator=evaluator,
+                    candles=symbol_df,
+                    benchmark_candles=btc_df,
+                    symbol=symbol,
+                )
+                fitness = calculate_fitness(results)
+                return fitness, results.summary()
         except Exception as e:
             logger.error(f"Evaluation error for {generated.name}: {e}")
             return FitnessResult(
@@ -845,8 +930,6 @@ def run_full_evolution(
                     name=f"Seed_{seed_data.get('strategy_name', 'Unknown')}",
                     entry_long=seed_data.get('entry_long', ''),
                     exit_long=seed_data.get('exit_long', ''),
-                    entry_short=seed_data.get('entry_short'),
-                    exit_short=seed_data.get('exit_short'),
                     rationale=f"Transplanted from {seed_data.get('strategy_name', 'unknown source')} (Sharpe: {seed_data.get('backtest_sharpe', 'N/A')})",
                 )
                 logger.info(f"Loaded seed strategy: {seed_strategy.name}")
@@ -983,17 +1066,54 @@ def main():
         default=None,
         help="Path to JSON file with seed strategy for genetic transplantation"
     )
+    arg_parser.add_argument(
+        "--analyze",
+        action="store_true",
+        help="Use Opus to analyze top strategies after evolution (explains WHY they work)"
+    )
+    arg_parser.add_argument(
+        "--analyze-top",
+        type=int,
+        default=3,
+        help="Number of top strategies to analyze (default: 3)"
+    )
+    arg_parser.add_argument(
+        "--market-filter",
+        type=str,
+        choices=["btc_trend", "asset_trend"],
+        help="Override market filter (default: btc_trend for altcoins, asset_trend for BTC)"
+    )
+    # Data snapshot arguments (T1 #2)
+    arg_parser.add_argument(
+        "--snapshot",
+        action="store_true",
+        help="Create a data snapshot at run start for reproducibility"
+    )
+    arg_parser.add_argument(
+        "--use-snapshot",
+        type=str,
+        default=None,
+        help="Use existing snapshot ID instead of loading from database"
+    )
+    arg_parser.add_argument(
+        "--snapshot-dir",
+        type=str,
+        default=None,
+        help="Directory for data snapshots (default: crypto/data/snapshots)"
+    )
 
     args = arg_parser.parse_args()
 
     db_path = Path(args.db) if args.db else None
 
     # Phase 2D: Full evolution engine
+    result = None
     if args.full:
         checkpoint_dir = Path(args.checkpoint_dir) if args.checkpoint_dir else None
         custom_themes = MEAN_REVERSION_THEMES if args.mean_reversion else None
         seed_path = Path(args.seed) if args.seed else None
-        run_full_evolution(
+        snap_dir = Path(args.snapshot_dir) if args.snapshot_dir else None
+        result = run_full_evolution(
             symbol=args.symbol,
             generations=args.generations,
             population_size=args.population,
@@ -1002,6 +1122,11 @@ def main():
             resume_from=args.resume,
             custom_themes=custom_themes,
             seed_strategy_path=seed_path,
+            market_filter_override=args.market_filter,
+            create_snapshot=args.snapshot,
+            use_snapshot=args.use_snapshot,
+            snapshot_dir=snap_dir,
+            use_walkforward=args.walkforward,
         )
     else:
         # Phase 2A/2B/2C: Simple evolution loop
@@ -1015,7 +1140,39 @@ def main():
             use_portfolio=args.portfolio,
             use_walkforward=args.walkforward,
             portfolio_symbols=portfolio_symbols,
+            market_filter_override=args.market_filter,
         )
+
+    # Opus-powered strategy analysis
+    if args.analyze and result and result.final_population:
+        logger.info(f"\n{'=' * 60}")
+        logger.info("OPUS STRATEGY ANALYSIS")
+        logger.info("=" * 60)
+        logger.info(f"Analyzing top {args.analyze_top} strategies with Opus...\n")
+
+        try:
+            analyses = analyze_evolution_winners(
+                result,
+                top_n=args.analyze_top,
+                log_dir=Path("crypto/logs"),
+            )
+
+            for analysis in analyses:
+                print(analysis)
+
+            # Save analyses to file
+            analysis_file = Path("crypto/logs") / f"analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+            with open(analysis_file, "w") as f:
+                f.write(f"# Strategy Analysis Report\n")
+                f.write(f"Generated: {datetime.now().strftime('%m/%d/%Y %I:%M %p')}\n\n")
+                for analysis in analyses:
+                    f.write(str(analysis))
+                    f.write("\n\n")
+            logger.info(f"Analysis saved to: {analysis_file}")
+
+        except Exception as e:
+            logger.error(f"Strategy analysis failed: {e}")
+            logger.info("Evolution completed successfully, but Opus analysis encountered an error.")
 
 
 if __name__ == "__main__":

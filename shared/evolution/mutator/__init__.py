@@ -7,6 +7,7 @@ from shared.evolution.mutator.llm_client import (
     AnthropicClient,
     create_llm_client,
     create_default_client,
+    create_analysis_client,
 )
 from shared.evolution.mutator.generator import (
     GeneratedStrategy,
@@ -35,6 +36,27 @@ from shared.evolution.mutator.evolution import (
     EvolutionEngine,
     ProgressCallback,
 )
+from shared.evolution.mutator.deduplication import (
+    StrategyDeduplicator,
+    DeduplicationStats,
+    deduplicate_population,
+)
+from shared.evolution.mutator.analyzer import (
+    StrategyAnalysis,
+    StrategyAnalyzer,
+    analyze_evolution_winners,
+)
+from shared.evolution.mutator.parameter_mutation import (
+    MutationResult,
+    mutate_parameters,
+    random_mutate_parameters,
+    crossover_parameters,
+    random_crossover_parameters,
+    generate_initial_parameters,
+    ParameterEvolutionState,
+    PARAMETER_MUTATION_SYSTEM_PROMPT,
+    PARAMETER_MUTATION_PROMPT,
+)
 
 __all__ = [
     # LLM Client
@@ -45,6 +67,7 @@ __all__ = [
     "AnthropicClient",
     "create_llm_client",
     "create_default_client",
+    "create_analysis_client",
     # Generator
     "GeneratedStrategy",
     "StrategyGenerator",
@@ -69,4 +92,22 @@ __all__ = [
     "EvolutionResult",
     "EvolutionEngine",
     "ProgressCallback",
+    # Deduplication (Phase 2E)
+    "StrategyDeduplicator",
+    "DeduplicationStats",
+    "deduplicate_population",
+    # Strategy Analyzer (Opus-powered)
+    "StrategyAnalysis",
+    "StrategyAnalyzer",
+    "analyze_evolution_winners",
+    # Parameter Evolution (Phase 5)
+    "MutationResult",
+    "mutate_parameters",
+    "random_mutate_parameters",
+    "crossover_parameters",
+    "random_crossover_parameters",
+    "generate_initial_parameters",
+    "ParameterEvolutionState",
+    "PARAMETER_MUTATION_SYSTEM_PROMPT",
+    "PARAMETER_MUTATION_PROMPT",
 ]

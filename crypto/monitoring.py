@@ -68,13 +68,28 @@ class WebhookAlerter:
     """
     Send alerts via webhook (Slack/Discord compatible).
 
-    Supports both Slack and Discord webhook formats.
+    For Discord webhooks, uses unified DiscordNotifier with rich embeds.
+    For Slack webhooks, uses native Slack format.
+
     Set ALERT_WEBHOOK_URL environment variable.
     """
+
+    # Discord embed colors for alerts
+    _ALERT_COLORS = {
+        "info": 0x0099FF,      # Blue
+        "warning": 0xFFFF00,   # Yellow
+        "critical": 0xFF0000,  # Red
+    }
 
     def __init__(self, webhook_url: Optional[str] = None):
         self.webhook_url = webhook_url or os.environ.get("ALERT_WEBHOOK_URL")
         self.is_discord = self.webhook_url and "discord" in self.webhook_url.lower() if self.webhook_url else False
+
+        # Use unified DiscordNotifier for Discord webhooks
+        self._notifier: Optional["DiscordNotifier"] = None
+        if self.is_discord and self.webhook_url:
+            from crypto.notifications import DiscordNotifier
+            self._notifier = DiscordNotifier(self.webhook_url)
 
     def send(self, message: str, level: str = "info") -> bool:
         """
@@ -91,20 +106,22 @@ class WebhookAlerter:
             logger.warning("No webhook URL configured (set ALERT_WEBHOOK_URL)")
             return False
 
-        # Format for Discord vs Slack
-        if self.is_discord:
-            # Discord format
-            payload = {
-                "content": f"**[{level.upper()}]** {message}",
-                "username": "Crypto Alpha Bot",
+        # Use unified DiscordNotifier for Discord webhooks (with embeds)
+        if self.is_discord and self._notifier:
+            embed = {
+                "title": f"ALERT: {level.upper()}",
+                "description": message,
+                "color": self._ALERT_COLORS.get(level, 0x0099FF),
+                "timestamp": datetime.utcnow().isoformat(),
             }
-        else:
-            # Slack format
-            emoji = {"info": ":information_source:", "warning": ":warning:", "critical": ":rotating_light:"}.get(level, ":robot_face:")
-            payload = {
-                "text": f"{emoji} *[{level.upper()}]* {message}",
-                "username": "Crypto Alpha Bot",
-            }
+            return self._notifier._send_sync([embed])
+
+        # Slack format (unchanged)
+        emoji = {"info": ":information_source:", "warning": ":warning:", "critical": ":rotating_light:"}.get(level, ":robot_face:")
+        payload = {
+            "text": f"{emoji} *[{level.upper()}]* {message}",
+            "username": "Crypto Alpha Bot",
+        }
 
         try:
             data = json.dumps(payload).encode("utf-8")
@@ -135,7 +152,63 @@ class WebhookAlerter:
         if not self.webhook_url:
             return False
 
-        # Format report message
+        # Use unified DiscordNotifier for Discord webhooks (with rich embed)
+        if self.is_discord and self._notifier:
+            pnl_color = 0x00FF00 if report.get("daily_pnl", 0) >= 0 else 0xFF0000
+            daily_pnl = report.get("daily_pnl", 0)
+            daily_pnl_pct = report.get("daily_pnl_pct", 0)
+            pnl_sign = "+" if daily_pnl >= 0 else ""
+
+            embed = {
+                "title": f"Daily Performance Report - {report.get('date', 'N/A')}",
+                "color": pnl_color,
+                "fields": [
+                    {
+                        "name": "Paper Equity",
+                        "value": f"${report.get('paper_equity', 0):,.2f}",
+                        "inline": True,
+                    },
+                    {
+                        "name": "Daily P&L",
+                        "value": f"{pnl_sign}${daily_pnl:,.2f} ({pnl_sign}{daily_pnl_pct:.2f}%)",
+                        "inline": True,
+                    },
+                    {
+                        "name": "Cumulative P&L",
+                        "value": f"${report.get('total_pnl', 0):+,.2f} ({report.get('total_pnl_pct', 0):+.2f}%)",
+                        "inline": True,
+                    },
+                    {
+                        "name": "Max Drawdown",
+                        "value": f"{report.get('max_drawdown', 0):.2f}%",
+                        "inline": True,
+                    },
+                    {
+                        "name": "Trades Today",
+                        "value": str(report.get("trades_today", 0)),
+                        "inline": True,
+                    },
+                    {
+                        "name": "Win Rate",
+                        "value": f"{report.get('win_rate', 0):.1%}",
+                        "inline": True,
+                    },
+                    {
+                        "name": "Active Strategies",
+                        "value": str(report.get("active_strategies", 0)),
+                        "inline": True,
+                    },
+                    {
+                        "name": "Data Status",
+                        "value": report.get("data_status", "Unknown"),
+                        "inline": True,
+                    },
+                ],
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+            return self._notifier._send_sync([embed])
+
+        # Slack format (unchanged)
         pnl_emoji = "📈" if report.get("daily_pnl", 0) >= 0 else "📉"
 
         message_lines = [

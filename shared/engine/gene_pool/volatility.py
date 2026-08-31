@@ -1,7 +1,79 @@
 """Volatility primitives for gene pool."""
 import pandas as pd
+import numpy as np
 from ta.volatility import AverageTrueRange
 
+
+# === VECTORIZED VERSIONS (Return pd.Series) ===
+
+def atr_regime_series(candles: pd.DataFrame, period: int, lookback: int = 100) -> pd.Series:
+    """
+    Vectorized volatility regime classification.
+
+    Args:
+        candles: OHLCV DataFrame
+        period: ATR period
+        lookback: Historical lookback for percentile comparison
+
+    Returns:
+        pd.Series: +1.0 (high vol), 0.0 (normal), -1.0 (low vol)
+    """
+    # Calculate ATR using ta library
+    atr = AverageTrueRange(
+        high=candles["high"],
+        low=candles["low"],
+        close=candles["close"],
+        window=period
+    ).average_true_range()
+
+    # Calculate rolling percentiles
+    p25 = atr.rolling(lookback).quantile(0.25)
+    p75 = atr.rolling(lookback).quantile(0.75)
+
+    # Classify: +1 if > p75, -1 if < p25, 0 otherwise
+    regime = pd.Series(0.0, index=candles.index)
+    regime = regime.where(~(atr > p75), 1.0)
+    regime = regime.where(~(atr < p25), -1.0)
+
+    # Fill NaN with 0.0 (normal)
+    regime = regime.fillna(0.0)
+
+    return regime
+
+
+def atr_percentile_series(candles: pd.DataFrame, period: int, lookback: int = 100) -> pd.Series:
+    """
+    Vectorized ATR percentile vs historical.
+
+    Args:
+        candles: OHLCV DataFrame
+        period: ATR period
+        lookback: Historical lookback for percentile
+
+    Returns:
+        pd.Series: 0.0 (lowest) to 1.0 (highest) in lookback window
+    """
+    # Calculate ATR using ta library
+    atr = AverageTrueRange(
+        high=candles["high"],
+        low=candles["low"],
+        close=candles["close"],
+        window=period
+    ).average_true_range()
+
+    # Calculate rolling percentile rank
+    percentile = atr.rolling(lookback).apply(
+        lambda x: (x < x.iloc[-1]).sum() / (len(x) - 1) if len(x) > 1 else 0.5,
+        raw=False
+    )
+
+    # Clamp to [0.0, 1.0] and fill NaN with 0.5
+    percentile = percentile.clip(0.0, 1.0).fillna(0.5)
+
+    return percentile
+
+
+# === SCALAR VERSIONS (Return single float for last bar) ===
 
 def atr_regime(candles: pd.DataFrame, period: int, lookback: int = 100) -> float:
     """

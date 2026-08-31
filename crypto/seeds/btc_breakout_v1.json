@@ -1,0 +1,7 @@
+{
+    "strategy_name": "Seed_BTC_Breakout_V1",
+    "symbol": "BTCUSDT",
+    "entry_long": "asset_trend(60) >= 0 AND bb_position(20) > 0.8 AND atr_regime(14) == 1.0",
+    "exit_long": "bb_position(20) < 0.2 OR atr_regime(14) == -1.0",
+    "rationale": "Buy breakouts above upper Bollinger Band when volatility is expanding and trend is up. Exit when price returns to lower band or volatility contracts."
+}

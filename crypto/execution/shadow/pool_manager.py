@@ -133,6 +133,10 @@ class ShadowPoolManager:
         self.hourly_pnl_start: float = initial_equity
         self.hourly_pnl_start_time: datetime = datetime.utcnow()
 
+        # Warning alert state (avoid spam - track last warning level sent)
+        self._last_dd_warning_level: Optional[str] = None  # "warning", "elevated", "critical"
+        self._position_warnings_sent: set[str] = set()  # Set of position keys warned about
+
         # Ensure directories exist
         self.shadow_pool_dir.mkdir(parents=True, exist_ok=True)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -227,7 +231,36 @@ class ShadowPoolManager:
 
         hourly_dd = (self.hourly_pnl_start - self.state.paper_equity) / self.state.initial_equity
 
-        # >5% drawdown in 1 hour -> pause 1 hour
+        # Calculate total drawdown for warning checks
+        total_dd = (self.state.initial_equity - self.state.paper_equity) / self.state.initial_equity
+
+        # Determine warning level and send early warnings (before kill switches trigger)
+        current_warning_level = None
+        if total_dd > 0.10:  # 10% total - critical warning
+            current_warning_level = "critical"
+        elif hourly_dd > 0.03 or total_dd > 0.05:  # 3% hourly or 5% total - elevated warning
+            current_warning_level = "elevated"
+        elif hourly_dd > 0.02 or total_dd > 0.03:  # 2% hourly or 3% total - initial warning
+            current_warning_level = "warning"
+
+        # Send warning if level changed (avoiding spam)
+        if current_warning_level and current_warning_level != self._last_dd_warning_level:
+            self._last_dd_warning_level = current_warning_level
+            if self.notifier:
+                # Calculate peak equity for context
+                peak_equity = max(self.state.initial_equity, self.state.paper_equity)
+                asyncio.create_task(self.notifier.send_drawdown_warning(
+                    current_dd_pct=max(hourly_dd, total_dd) * 100,
+                    threshold=current_warning_level,
+                    equity=self.state.paper_equity,
+                    peak_equity=peak_equity,
+                ))
+                logger.warning(f"Drawdown {current_warning_level}: hourly={hourly_dd:.1%}, total={total_dd:.1%}")
+        elif not current_warning_level:
+            # Reset warning state when recovered
+            self._last_dd_warning_level = None
+
+        # >5% drawdown in 1 hour -> pause 1 hour (kill switch)
         if hourly_dd > 0.05:
             logger.warning(f"KILL SWITCH: >5% drawdown in 1 hour ({hourly_dd:.1%}), pausing for 1 hour")
             self.trading_paused = True
@@ -243,10 +276,7 @@ class ShadowPoolManager:
                 ))
             return False
 
-        # Check total drawdown
-        total_dd = (self.state.initial_equity - self.state.paper_equity) / self.state.initial_equity
-
-        # >15% total drawdown -> full stop
+        # >15% total drawdown -> full stop (total_dd already calculated above)
         if total_dd > 0.15:
             logger.critical(f"KILL SWITCH: >15% total drawdown ({total_dd:.1%}), FULL STOP")
             self.trading_paused = True
@@ -269,6 +299,7 @@ class ShadowPoolManager:
     def check_stop_losses(self, prices: dict[str, float]) -> list[str]:
         """
         Check stop-losses for all open positions.
+        Also sends warnings for positions approaching stop-loss (-1.5%).
 
         Args:
             prices: Current prices per symbol
@@ -277,6 +308,7 @@ class ShadowPoolManager:
             List of position keys that hit stop loss
         """
         triggered = []
+        warning_threshold_pct = -1.5  # Send warning at -1.5% (halfway to 3% stop)
 
         for key, position in self.state.positions.items():
             if position.symbol not in prices:
@@ -287,8 +319,31 @@ class ShadowPoolManager:
             # Check stop-loss (3% below entry for longs)
             if position.side == "LONG":
                 stop_price = position.entry_price * (1 - self.stop_loss_pct)
+
+                # Calculate unrealized P&L percentage
+                unrealized_pnl_pct = position.unrealized_pnl_pct(current_price)
+
+                # Send position warning at -1.5% (only once per position)
+                if unrealized_pnl_pct <= warning_threshold_pct and key not in self._position_warnings_sent:
+                    self._position_warnings_sent.add(key)
+                    if self.notifier:
+                        asyncio.create_task(self.notifier.send_position_warning(
+                            symbol=position.symbol,
+                            strategy_id=position.strategy_id,
+                            unrealized_pnl_pct=unrealized_pnl_pct,
+                            entry_price=position.entry_price,
+                            current_price=current_price,
+                        ))
+                        logger.warning(
+                            f"Position warning for {position.symbol}: {unrealized_pnl_pct:.2f}% "
+                            f"(approaching stop-loss at -{self.stop_loss_pct*100:.0f}%)"
+                        )
+
+                # Check actual stop-loss trigger
                 if current_price <= stop_price:
                     triggered.append(key)
+                    # Clear warning state for this position (will be closed)
+                    self._position_warnings_sent.discard(key)
                     logger.warning(
                         f"STOP LOSS triggered for {position.symbol} "
                         f"(entry: {position.entry_price:.4f}, stop: {stop_price:.4f}, "
@@ -571,8 +626,9 @@ class ShadowPoolManager:
         )
         self._log_trade(trade_log, entry_time_ms=entry_time_ms)
 
-        # Remove position
+        # Remove position and clear any warning state
         del self.state.positions[position_key]
+        self._position_warnings_sent.discard(position_key)
 
         return True
 
@@ -592,10 +648,30 @@ class ShadowPoolManager:
                 f"(size: ${trade.position_size_usdt:.2f})"
             )
 
-        # Send Discord notification
+        # Send Discord notification with enriched context
         if self.notifier:
             if "ENTRY" in trade.signal:
-                asyncio.create_task(self.notifier.send_trade_entry(trade))
+                # Gather enriched context for entry notifications
+                position_key = f"{trade.strategy_id}:{trade.coin}"
+                position = self.state.positions.get(position_key)
+
+                stop_loss_price = None
+                stop_loss_pct = None
+                risk_amount = None
+
+                if position and position.stop_loss_price:
+                    stop_loss_price = position.stop_loss_price
+                    stop_loss_pct = self.stop_loss_pct * 100  # 3.0 for 3%
+                    risk_amount = trade.position_size_usdt * self.stop_loss_pct
+
+                asyncio.create_task(self.notifier.send_trade_entry(
+                    trade=trade,
+                    stop_loss_price=stop_loss_price,
+                    stop_loss_pct=stop_loss_pct,
+                    risk_amount=risk_amount,
+                    current_exposure_pct=self.state.current_exposure * 100,
+                    open_positions=self.state.open_position_count,
+                ))
             elif "EXIT" in trade.signal:
                 asyncio.create_task(self.notifier.send_trade_exit(trade, entry_time_ms))
 

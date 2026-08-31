@@ -1,0 +1,9 @@
+{
+    "strategy_name": "Seed_BTC_Simple_Trend_V1",
+    "symbol": "BTCUSDT",
+    "entry_long": "asset_trend(60) >= 0 AND ema_trend(9,21) == 1.0",
+    "exit_long": "ema_trend(9,21) == -1.0",
+    "backtest_sharpe": null,
+    "source": "Simplified BTC momentum strategy to ensure trades occur",
+    "rationale": "Use minimal conditions to generate trades: (1) BTC must be in uptrend (asset_trend as market filter), (2) Short-term momentum is bullish (9/21 EMA crossover). Exit when short-term trend reverses. This removes the overly restrictive price_position and atr_percentile filters that prevented any trades in the previous seed."
+}

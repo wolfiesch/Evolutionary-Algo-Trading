@@ -1,0 +1,8 @@
+{
+    "strategy_name": "Bollinger_MeanReversion_V1",
+    "rationale": "ProFiT-style seed: Buy at lower Bollinger Band oversold, sell at middle band. Simple mean reversion that works in ranging markets.",
+    "entry_long": "btc_trend(60) >= 0 AND bb_position(20,2) < -0.6 AND norm_rsi(14) < -0.3",
+    "exit_long": "bb_position(20,2) > 0 OR norm_rsi(14) > 0.4",
+    "source": "ProFiT paper methodology - known profitable pattern",
+    "category": "mean_reversion"
+}

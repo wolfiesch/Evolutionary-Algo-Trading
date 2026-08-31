@@ -3,6 +3,7 @@ Portfolio backtester engine - Phase 2C.
 
 Multi-symbol backtesting with position limits and risk management.
 """
+import logging
 import math
 from typing import Callable, Optional
 import pandas as pd
@@ -14,6 +15,14 @@ from shared.evolution.backtester.models import (
     PortfolioBacktestResults,
     Trade,
 )
+
+logger = logging.getLogger(__name__)
+
+# Sharpe bounds - these are FLOOR/CEILING values, not sentinels
+# Strategies hitting -10 are genuinely terrible. The fitness calculator
+# uses -999 as the actual sentinel for disqualified strategies.
+SHARPE_FLOOR = -10.0
+SHARPE_CEILING = 10.0
 
 
 # Type alias for strategy evaluation function
@@ -360,7 +369,13 @@ class PortfolioBacktester:
         equity_curve: pd.Series,
         periods_per_year: int = 525600,
     ) -> float:
-        """Calculate annualized Sharpe ratio."""
+        """
+        Calculate annualized Sharpe ratio.
+
+        NOTE: Sharpe is capped at [-10, +10] to prevent extreme outliers.
+        This is a FLOOR/CEILING, not a sentinel value. The fitness calculator
+        uses -999 as the actual sentinel for disqualified strategies.
+        """
         if len(equity_curve) < 2:
             return 0.0
 
@@ -369,9 +384,17 @@ class PortfolioBacktester:
         if len(returns) < 2 or returns.std() == 0:
             return 0.0
 
-        sharpe = (returns.mean() / returns.std()) * math.sqrt(periods_per_year)
+        sharpe_raw = (returns.mean() / returns.std()) * math.sqrt(periods_per_year)
 
-        return max(-10.0, min(10.0, sharpe))
+        # Apply floor/ceiling with logging
+        if sharpe_raw < SHARPE_FLOOR:
+            logger.debug(f"Portfolio Sharpe floor hit: raw={sharpe_raw:.2f}, capped to {SHARPE_FLOOR}")
+            return SHARPE_FLOOR
+        elif sharpe_raw > SHARPE_CEILING:
+            logger.debug(f"Portfolio Sharpe ceiling hit: raw={sharpe_raw:.2f}, capped to {SHARPE_CEILING}")
+            return SHARPE_CEILING
+
+        return sharpe_raw
 
     def _empty_results(self, symbols: list[str]) -> PortfolioBacktestResults:
         """Return empty results for insufficient data."""

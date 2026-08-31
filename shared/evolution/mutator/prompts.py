@@ -5,51 +5,74 @@ Asset-agnostic prompts with configurable market filter names.
 """
 
 # Strategy generation prompt - COMPACT version for token efficiency
-STRATEGY_GENERATION_PROMPT = """Generate trading strategy JSON using ONLY these primitives:
+STRATEGY_GENERATION_PROMPT = """Generate trading strategy JSON.
 
-PRIMITIVES (use integer params: 5,9,14,20,21,50,60):
-- {market_filter_name}(w) -> ±1.0 (MUST use >= 0 in entry)
-- ema_trend(fast,slow) -> ±1.0
-- price_position(p) -> ±3.0
-- norm_rsi(p) -> -1 to +1
-- bb_position(p,std) -> -1 to +1
+*** MANDATORY: entry_long MUST start with "{market_filter_name}(60) >= 0 AND" ***
+
+PRIMITIVES (integer params: 5,9,14,20,21,50,60):
+
+REQUIRED FIRST (always include in entry):
+- {market_filter_name}(60) >= 0  <-- ALWAYS START ENTRY WITH THIS
+
+BINARY (use == 1.0 or == -1.0):
+- ema_trend(fast,slow) -> +1.0 uptrend, -1.0 downtrend
 - volume_intensity(p,thresh) -> 0 or 1
-- vwap_distance(p) -> ±3.0
-- atr_regime(p) -> ±1.0
 
-RULES: Max 5 primitives. Use 2-3 entry conditions (4+ rarely trigger). Loose thresholds (rsi<-0.3 not -0.6).
+CONTINUOUS (use > or < with thresholds):
+- norm_rsi(p) -> -1.0 to +1.0 (< -0.3 oversold, > 0.3 overbought)
+- bb_position(p,std) -> -1.0 to +1.0
+- price_position(p) -> -3.0 to +3.0
+- atr_regime(p) -> -1.0 to +1.0
+- trend_strength(p) -> 0.0 to 1.0
+
+RULES: Max 5 primitives. 2-3 entry conditions. Loose thresholds.
 
 Theme: {theme}
 
 ```json
-{{"strategy_name":"Name_V1","rationale":"brief","entry_long":"{market_filter_name}(60)>=0 AND ...","exit_long":"..."}}
+{{"strategy_name":"Name_V1","rationale":"brief","entry_long":"{market_filter_name}(60) >= 0 AND ema_trend(9,21) == 1.0 AND norm_rsi(14) < 0.3","exit_long":"norm_rsi(14) > 0.6"}}
 ```
 JSON only:"""
 
-# Mutation prompt - COMPACT version
+# Mutation prompt - COMPACT version with diversity guidance
 MUTATION_PROMPT = """Mutate strategy. Current: {strategy_name}
 Entry: {entry_long}
 Exit: {exit_long}
 Stats: Sharpe={sharpe}, WinRate={win_rate}%, Trades={trade_count}
 
-If trades<5: LOOSEN thresholds or REMOVE a condition. Otherwise: tweak params or swap primitive.
-Keep {market_filter_name}() in entry. Max 5 primitives. Integer params.
+*** KEEP "{market_filter_name}(60) >= 0 AND" AT START OF ENTRY ***
+
+MUTATION OPTIONS (pick ONE):
+1. SWAP: norm_rsi->bb_position, ema_trend->atr_regime
+2. PARAMS: 14->9, 20->21, 50->60
+3. THRESHOLDS: -0.3->-0.2, 0.5->0.6
+4. ADD exit condition (if <3)
+5. REMOVE entry condition (if >2, but NEVER remove {market_filter_name})
+
+If trades<10: LOOSEN thresholds (-0.3->-0.1) or REMOVE a non-filter condition.
+Make a DIFFERENT change than previous mutations!
 
 ```json
-{{"strategy_name":"{strategy_name}_M1","mutation_type":"param|threshold|add|remove|swap","mutation_description":"brief","entry_long":"...","exit_long":"..."}}
+{{"strategy_name":"{strategy_name}_M1","mutation_type":"swap|param|threshold|add|remove","mutation_description":"change made","entry_long":"{market_filter_name}(60) >= 0 AND ...","exit_long":"..."}}
 ```
 JSON only:"""
 
-# Strategy themes for diversity
+# Strategy themes for diversity - each should produce distinct strategies
 STRATEGY_THEMES = [
-    "Simple trend following with just 2 conditions",  # NEW: simpler strategies
-    "Momentum continuation in uptrends",
-    "Mean reversion on oversold bounces (use RSI < -0.3, not -0.5)",  # Clearer threshold
-    "Breakout on volatility expansion",
-    "Pullback buying with loose thresholds",  # Emphasize loose
-    "Range trading in sideways markets",
-    "Volume-confirmed trend following",
-    "Basic RSI mean reversion (keep it simple)",  # NEW: simpler
+    # Trend-based (3)
+    "Simple EMA crossover: buy when ema_trend(9,21)==1.0, sell on reversal",
+    "Strong trend filter: require trend_strength(20) > 0.5 with ema_trend",
+    "Momentum continuation: price_position(50) > 0.5 in uptrend",
+    # Mean reversion (3)
+    "RSI bounce: norm_rsi(14) < -0.3 oversold, exit at neutral",
+    "Bollinger mean reversion: bb_position(20,2) < -0.5, exit at 0",
+    "VWAP reversion: vwap_distance(20) < -1.0, exit near VWAP",
+    # Volume-based (2)
+    "Volume breakout: volume_intensity(20,15) == 1 with trend",
+    "Volume confirmation: require volume_intensity on trend entry",
+    # Volatility-based (2)
+    "Low volatility trend: atr_regime(14) < 0 with ema_trend",
+    "Volatility expansion: atr_regime(14) > 0.3 momentum play",
 ]
 
 # Mean-reversion focused themes (for assets in choppy/sideways markets)
@@ -68,10 +91,12 @@ CROSSOVER_PROMPT = """Combine best elements of two strategies:
 A ({sharpe_a:.2f}): {entry_a} | Exit: {exit_a}
 B ({sharpe_b:.2f}): {entry_b} | Exit: {exit_b}
 
-Take better params from higher-Sharpe parent. Keep {market_filter_name}()>=0. Max 5 primitives.
+*** entry_long MUST start with "{market_filter_name}(60) >= 0 AND" ***
+
+Take better params from higher-Sharpe parent. Max 5 primitives.
 
 ```json
-{{"strategy_name":"Crossover_{name_a}_{name_b}","crossover_description":"brief","entry_long":"...","exit_long":"..."}}
+{{"strategy_name":"Crossover_V1","crossover_description":"brief","entry_long":"{market_filter_name}(60) >= 0 AND ...","exit_long":"..."}}
 ```
 JSON only:"""
 

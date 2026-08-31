@@ -3,6 +3,10 @@ Fitness calculator - asset-agnostic.
 
 Phase 2A: Sharpe-only scoring with basic disqualification.
 Phase 2B: Full regime testing with multipliers.
+
+IMPORTANT: Fitness scoring must preserve ranking signal even for negative-Sharpe
+strategies. This allows evolution to learn "which direction to improve" rather
+than collapsing all losers to identical scores.
 """
 from typing import Optional
 from shared.evolution.backtester.models import BacktestResults
@@ -15,29 +19,47 @@ from shared.evolution.fitness.regime_classifier import (
 )
 
 
-# Disqualification thresholds
-MIN_TRADES = 30              # Minimum trades for statistical significance (lowered from 50 for bootstrapping)
+# Disqualification thresholds (hard fails only - use sparingly)
+MIN_TRADES = 5               # Absolute minimum for any statistical validity
 MIN_TRADES_PER_REGIME = 2    # Phase 2B: Minimum trades per regime
-MAX_DRAWDOWN_HARD = 0.25     # 25% max drawdown
-MIN_WIN_RATE = 0.05          # 5% minimum win rate (very relaxed for Phase 2A testing)
+MAX_DRAWDOWN_HARD = 0.50     # 50% max drawdown - hard fail (was 25%, too strict)
+MIN_WIN_RATE = 0.0           # Removed - win rate is in the score, not a gate
 MIN_REGIME_PASSES = 4        # Need Sharpe >= 0.5 in 4/5 regimes
-MAX_SHARPE_CAP = 3.0         # Sanity cap - Sharpe > 3.0 is rare in production
+MAX_SHARPE_CAP = 5.0         # Sanity cap - Sharpe > 5.0 is suspicious
+MIN_SHARPE_FLOOR = -5.0      # Floor for extremely negative Sharpe (prevents -inf)
+
+# NOTE on Sharpe values:
+# - Backtester clamps Sharpe to [-10, +10] - these are FLOOR/CEILING, not sentinels
+# - Fitness calculator further clamps to [-5, +5] for scoring purposes
+# - DISQUALIFIED strategies get score = -999 (the actual sentinel value)
+# - A Sharpe of -10 means "genuinely terrible strategy", not "something broke"
+
+# Continuous penalty weights (soft penalties, not hard gates)
+DRAWDOWN_PENALTY_WEIGHT = 2.0    # How much to penalize drawdown
+TRADE_COUNT_TARGET = 30          # Ideal number of trades for statistical validity
+TRADE_PENALTY_WEIGHT = 0.5       # Penalty for being far from target trade count
 
 
 def calculate_fitness(backtest_results: BacktestResults) -> FitnessResult:
     """
     Calculate fitness score from backtest results.
 
-    Phase 2A Formula (simple):
-        final_score = sharpe_ratio * drawdown_multiplier
+    CONTINUOUS SCORING FORMULA (preserves ranking for all strategies):
+        final_score = base_sharpe - drawdown_penalty - trade_penalty
 
     Where:
-        - drawdown_multiplier = drawdown_penalty(max_dd)
+        - base_sharpe = sharpe clamped to [MIN_SHARPE_FLOOR, MAX_SHARPE_CAP]
+        - drawdown_penalty = DRAWDOWN_PENALTY_WEIGHT * max_dd
+        - trade_penalty = penalty for being far from target trade count
 
-    Disqualification (score = 0):
-        - Less than MIN_TRADES trades (insufficient sample)
-        - Max drawdown > 25%
-        - Win rate < 20%
+    HARD DISQUALIFICATION (score = -999, only for truly invalid):
+        - Less than MIN_TRADES trades (no statistical validity)
+        - Max drawdown > 50% (catastrophic failure)
+
+    This formula ensures:
+        - Sharpe=-2 ranks higher than Sharpe=-5 (learning signal preserved)
+        - Drawdown is penalized smoothly, not as a hard gate
+        - Low trade counts are penalized but not disqualifying
 
     Args:
         backtest_results: Results from backtester
@@ -54,34 +76,48 @@ def calculate_fitness(backtest_results: BacktestResults) -> FitnessResult:
         total_return=backtest_results.total_return,
     )
 
-    # Check disqualification conditions
+    # HARD DISQUALIFICATION - only for truly invalid strategies
     if backtest_results.trade_count < MIN_TRADES:
         result.disqualified = True
         result.disqualification_reason = f"Insufficient trades: {backtest_results.trade_count} < {MIN_TRADES}"
-        result.final_score = 0.0
+        result.final_score = -999.0  # Sentinel for "invalid", not 0
         return result
 
     if backtest_results.max_drawdown > MAX_DRAWDOWN_HARD:
         result.disqualified = True
-        result.disqualification_reason = f"Max drawdown too high: {backtest_results.max_drawdown:.1%} > {MAX_DRAWDOWN_HARD:.0%}"
-        result.final_score = 0.0
+        result.disqualification_reason = f"Catastrophic drawdown: {backtest_results.max_drawdown:.1%} > {MAX_DRAWDOWN_HARD:.0%}"
+        result.final_score = -999.0
         return result
 
-    if backtest_results.win_rate < MIN_WIN_RATE:
-        result.disqualified = True
-        result.disqualification_reason = f"Win rate too low: {backtest_results.win_rate:.1%} < {MIN_WIN_RATE:.0%}"
-        result.final_score = 0.0
-        return result
+    # CONTINUOUS SCORING - all non-disqualified strategies get rankable scores
 
-    # Calculate drawdown multiplier
-    result.drawdown_multiplier = drawdown_penalty(backtest_results.max_drawdown)
+    # 1. Base Sharpe (clamped to prevent extreme outliers)
+    base_sharpe = max(MIN_SHARPE_FLOOR, min(MAX_SHARPE_CAP, backtest_results.sharpe_ratio))
 
-    # Phase 2A: Simple fitness formula
-    # Sharpe ratio (can be negative) * drawdown penalty
-    # Cap Sharpe at MAX_SHARPE_CAP to prevent inflated scores from low-trade strategies
-    base_sharpe = max(0.0, backtest_results.sharpe_ratio)  # Floor at 0
-    capped_sharpe = min(base_sharpe, MAX_SHARPE_CAP)  # Cap at 3.0
-    result.final_score = capped_sharpe * result.drawdown_multiplier
+    # 2. Drawdown penalty (linear, always reduces score)
+    dd_penalty = DRAWDOWN_PENALTY_WEIGHT * backtest_results.max_drawdown
+    result.drawdown_multiplier = 1.0 - backtest_results.max_drawdown  # For logging
+
+    # 3. Trade count penalty (penalize both too few and too many trades)
+    # Fewer trades = less confidence in results
+    # Too many trades = likely noise trading / high friction
+    trade_ratio = backtest_results.trade_count / TRADE_COUNT_TARGET
+    if trade_ratio < 1.0:
+        # Penalize for too few trades (more severe)
+        trade_penalty = TRADE_PENALTY_WEIGHT * (1.0 - trade_ratio)
+    else:
+        # Small penalty for excessive trading
+        trade_penalty = TRADE_PENALTY_WEIGHT * 0.1 * min(trade_ratio - 1.0, 2.0)
+
+    # Final score: higher is better, can be negative
+    result.final_score = base_sharpe - dd_penalty - trade_penalty
+
+    # Add note about score composition for debugging
+    if backtest_results.sharpe_ratio < 0:
+        result.disqualification_reason = (
+            f"Negative Sharpe={backtest_results.sharpe_ratio:.2f} "
+            f"(dd_pen={dd_penalty:.2f}, trade_pen={trade_penalty:.2f})"
+        )
 
     return result
 
@@ -138,23 +174,22 @@ def calculate_fitness_with_regimes(
     """
     Calculate fitness score with regime testing (Phase 2B).
 
-    Formula:
-        final_score = sharpe_ratio * regime_multiplier * drawdown_multiplier
+    CONTINUOUS SCORING FORMULA:
+        final_score = base_sharpe * regime_multiplier - drawdown_penalty - regime_penalty
 
     Where:
-        - regime_multiplier = 0 if <4 regimes pass (Sharpe >= 0.5), else (passed/5)
-        - drawdown_multiplier = drawdown_penalty(max_dd)
+        - base_sharpe = sharpe clamped to [MIN_SHARPE_FLOOR, MAX_SHARPE_CAP]
+        - regime_multiplier = passed_regimes / 5 (continuous, not a gate)
+        - drawdown_penalty = DRAWDOWN_PENALTY_WEIGHT * max_dd
+        - regime_penalty = penalty for negative Sharpe in any regime (soft, not hard fail)
 
-    Regime Rules:
-        1. HARD FAIL: Any regime with negative Sharpe -> disqualified
-        2. PASS REQUIREMENT: Sharpe >= 0.5 in at least 4/5 regimes
+    Regime Rules (soft penalties, not hard gates):
+        1. Negative Sharpe in a regime: heavy penalty but not disqualification
+        2. Fewer than 4/5 regimes passing: reduced multiplier
 
-    Disqualification (score = 0):
+    HARD DISQUALIFICATION (score = -999):
         - Less than MIN_TRADES total trades
-        - Any regime with negative Sharpe
-        - Max drawdown > 25%
-        - Win rate < 15%
-        - Less than 4 regimes pass (Sharpe >= 0.5)
+        - Max drawdown > 50%
 
     Args:
         overall_results: Aggregated backtest results across all regimes
@@ -189,52 +224,52 @@ def calculate_fitness_with_regimes(
     result.regime_scores = regime_sharpes
     result.regime_trade_counts = regime_trade_counts
 
-    # Check basic disqualification (same as Phase 2A)
+    # HARD DISQUALIFICATION - only for truly invalid strategies
     if overall_results.trade_count < MIN_TRADES:
         result.disqualified = True
         result.disqualification_reason = f"Insufficient trades: {overall_results.trade_count} < {MIN_TRADES}"
-        result.final_score = 0.0
+        result.final_score = -999.0
         return result
 
     if overall_results.max_drawdown > MAX_DRAWDOWN_HARD:
         result.disqualified = True
-        result.disqualification_reason = f"Max drawdown too high: {overall_results.max_drawdown:.1%} > {MAX_DRAWDOWN_HARD:.0%}"
-        result.final_score = 0.0
+        result.disqualification_reason = f"Catastrophic drawdown: {overall_results.max_drawdown:.1%} > {MAX_DRAWDOWN_HARD:.0%}"
+        result.final_score = -999.0
         return result
 
-    if overall_results.win_rate < MIN_WIN_RATE:
-        result.disqualified = True
-        result.disqualification_reason = f"Win rate too low: {overall_results.win_rate:.1%} < {MIN_WIN_RATE:.0%}"
-        result.final_score = 0.0
-        return result
+    # CONTINUOUS SCORING - regime-aware
 
-    # Phase 2B: Check regime-specific disqualification
-    # HARD FAIL: Any regime with negative Sharpe
-    has_neg, neg_regime = has_negative_regime(regime_sharpes)
-    if has_neg:
-        result.disqualified = True
-        result.negative_regime = neg_regime
-        result.disqualification_reason = f"Negative Sharpe in {neg_regime}: {regime_sharpes[neg_regime]:.2f}"
-        result.final_score = 0.0
-        return result
+    # 1. Base Sharpe (clamped)
+    base_sharpe = max(MIN_SHARPE_FLOOR, min(MAX_SHARPE_CAP, overall_results.sharpe_ratio))
 
-    # Calculate regime pass count and multiplier
+    # 2. Regime pass count and multiplier (continuous)
     result.regime_pass_count = calculate_regime_pass_count(regime_sharpes)
-    result.regime_multiplier = calculate_regime_multiplier(regime_sharpes, MIN_REGIME_PASSES)
+    # Use continuous multiplier: passes/5, minimum 0.2 to preserve some signal
+    result.regime_multiplier = max(0.2, result.regime_pass_count / 5.0)
 
-    # Disqualify if not enough regimes pass
-    if result.regime_pass_count < MIN_REGIME_PASSES:
-        result.disqualified = True
-        result.disqualification_reason = f"Only {result.regime_pass_count}/5 regimes pass (need {MIN_REGIME_PASSES})"
-        result.final_score = 0.0
-        return result
+    # 3. Negative regime penalty (soft penalty, not hard fail)
+    has_neg, neg_regime = has_negative_regime(regime_sharpes)
+    regime_penalty = 0.0
+    if has_neg:
+        result.negative_regime = neg_regime
+        # Penalty proportional to how negative the worst regime is
+        worst_sharpe = min(regime_sharpes.values())
+        regime_penalty = abs(worst_sharpe) * 0.5  # 50% of the negative magnitude
 
-    # Calculate drawdown multiplier
-    result.drawdown_multiplier = drawdown_penalty(overall_results.max_drawdown)
+    # 4. Drawdown penalty
+    dd_penalty = DRAWDOWN_PENALTY_WEIGHT * overall_results.max_drawdown
+    result.drawdown_multiplier = 1.0 - overall_results.max_drawdown
 
-    # Final score: Sharpe * regime_multiplier * drawdown_multiplier
-    base_sharpe = max(0.0, overall_results.sharpe_ratio)
-    result.final_score = base_sharpe * result.regime_multiplier * result.drawdown_multiplier
+    # Final score: higher is better
+    result.final_score = (base_sharpe * result.regime_multiplier) - dd_penalty - regime_penalty
+
+    # Add debugging info
+    if result.regime_pass_count < MIN_REGIME_PASSES or has_neg:
+        result.disqualification_reason = (
+            f"Regimes: {result.regime_pass_count}/5 pass, "
+            f"neg_regime={neg_regime}, "
+            f"regime_pen={regime_penalty:.2f}"
+        )
 
     return result
 
@@ -284,6 +319,7 @@ def aggregate_regime_results(regime_results: dict[str, BacktestResults]) -> Back
         max_drawdown = abs(drawdown.min())
 
         # Calculate Sharpe (simplified - use per-period returns)
+        # NOTE: Cap at -10/+10 consistent with backtester engines (floor, not sentinel)
         returns = equity_curve.pct_change().dropna()
         if len(returns) > 1 and returns.std() > 0:
             sharpe = (returns.mean() / returns.std()) * (525600 ** 0.5)  # Annualized

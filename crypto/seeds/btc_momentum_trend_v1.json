@@ -1,0 +1,9 @@
+{
+    "strategy_name": "Seed_BTC_Momentum_Trend_V1",
+    "symbol": "BTCUSDT",
+    "entry_long": "asset_trend(60) >= 0 AND price_position(20) > 0.3 AND atr_percentile(14) > 40",
+    "exit_long": "ema_trend(20,50) == -1.0 OR price_position(20) < -0.5",
+    "backtest_sharpe": null,
+    "source": "New design for BTC momentum/trend-following",
+    "rationale": "BTC trends hard - use momentum continuation instead of mean reversion. Enter when: BTC trend is bullish, price is above average (momentum), and volatility is expanding (trending). Exit when: longer-term trend reverses OR price falls significantly below average."
+}

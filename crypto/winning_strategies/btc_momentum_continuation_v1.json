@@ -1,0 +1,26 @@
+{
+  "strategy_id": "btc_momentum_continuation_v1",
+  "strategy_name": "BTC_Momentum_Continuation_V1",
+  "symbol": "BTCUSDT",
+  "timeframe": "H4",
+  "entry_long": "btc_trend(60) >= 0 AND ema_trend(14,20) > 0 AND price_position(25) < 1.0 AND volume_intensity(20,1.5) > 0 AND vwap_distance(20) > 0",
+  "exit_long": "norm_rsi(14) > 0.5 OR bb_position(20,2) > 0.8",
+  "backtest_results": {
+    "sharpe_ratio": 2.73,
+    "trade_count": 69,
+    "win_rate": 0.478,
+    "total_return": 0.0518,
+    "max_drawdown": 0.0137,
+    "validation_method": "walk_forward",
+    "train_days": 60,
+    "test_days": 15
+  },
+  "risk_params": {
+    "max_position_pct": 0.10,
+    "stop_loss_pct": 0.03
+  },
+  "status": "awaiting_shadow_trading",
+  "created_date": "2025-12-16",
+  "evolution_source": "MomentumContinuation_V1 mutated 6 times from BTC breakout seed",
+  "notes": "Buy pullbacks in confirmed uptrends with volume confirmation. Exits on mild RSI overbought or BB upper band. Evolved from breakout seed but converged to trend-following with pullback entry."
+}

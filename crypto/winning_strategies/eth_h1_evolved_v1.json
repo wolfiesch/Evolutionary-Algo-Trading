@@ -1,0 +1,154 @@
+{
+  "symbol": "ETHUSDT",
+  "timeframe": 60,
+  "fitness": {
+    "score": 0.6607250391619088,
+    "sharpe_ratio": 1.3214500783238177,
+    "win_rate": 0.7619047619047619,
+    "trade_count": 21,
+    "max_drawdown": 0.006888711521346676
+  },
+  "parameters": {
+    "regime_indicator": "adx",
+    "regime_period": 14,
+    "regime_threshold": 25.0,
+    "weights_A": {
+      "trend": 0.2,
+      "momentum": 0.30000000000000004,
+      "mean_reversion": 0.6000000000000001,
+      "volatility": 0.1,
+      "volume": 0.1
+    },
+    "weights_B": {
+      "trend": 0.7000000000000001,
+      "momentum": 0.4,
+      "mean_reversion": 0.1,
+      "volatility": 0.2,
+      "volume": -0.1
+    },
+    "trend_fast_period": 9,
+    "trend_slow_period": 21,
+    "momentum_period": 14,
+    "reversion_period": 20,
+    "reversion_std_dev": 2,
+    "volatility_period": 14,
+    "volume_period": 20,
+    "entry_threshold_long": 0.6000000000000001,
+    "exit_threshold_long": -0.15000000000000002,
+    "entry_threshold_short": -0.30000000000000004,
+    "exit_threshold_short": 0.1,
+    "stop_loss_atr_mult": 1.5,
+    "take_profit_atr_mult": 3.0,
+    "min_bars_between_trades": 5,
+    "max_position_bars": 100,
+    "market_filter_period": 60,
+    "market_filter_threshold": 0.0,
+    "allow_long": true,
+    "allow_short": false,
+    "weight_btc_correlation": 0.0,
+    "btc_trend_period": 60,
+    "weight_funding_rate": 0.0,
+    "funding_rate_threshold": 0.01,
+    "weight_btc_dominance": 0.0,
+    "btc_dominance_period": 30
+  },
+  "generation_history": [
+    {
+      "generation": 1,
+      "best_score": 0.0,
+      "best_sharpe": -3.6785548760903093,
+      "population_size": 10
+    },
+    {
+      "generation": 2,
+      "best_score": 0.0,
+      "best_sharpe": -3.6785548760903093,
+      "population_size": 6
+    },
+    {
+      "generation": 3,
+      "best_score": 0.0,
+      "best_sharpe": -3.6785548760903093,
+      "population_size": 7
+    },
+    {
+      "generation": 4,
+      "best_score": 0.0,
+      "best_sharpe": -3.6785548760903093,
+      "population_size": 5
+    },
+    {
+      "generation": 5,
+      "best_score": 0.6607250391619088,
+      "best_sharpe": 1.3214500783238177,
+      "population_size": 7
+    },
+    {
+      "generation": 6,
+      "best_score": 0.6607250391619088,
+      "best_sharpe": 1.3214500783238177,
+      "population_size": 8
+    },
+    {
+      "generation": 7,
+      "best_score": 0.6607250391619088,
+      "best_sharpe": 1.3214500783238177,
+      "population_size": 4
+    },
+    {
+      "generation": 8,
+      "best_score": 0.6607250391619088,
+      "best_sharpe": 1.3214500783238177,
+      "population_size": 3
+    },
+    {
+      "generation": 9,
+      "best_score": 0.6607250391619088,
+      "best_sharpe": 1.3214500783238177,
+      "population_size": 3
+    },
+    {
+      "generation": 10,
+      "best_score": 0.6607250391619088,
+      "best_sharpe": 1.3214500783238177,
+      "population_size": 5
+    },
+    {
+      "generation": 11,
+      "best_score": 0.6607250391619088,
+      "best_sharpe": 1.3214500783238177,
+      "population_size": 5
+    },
+    {
+      "generation": 12,
+      "best_score": 0.6607250391619088,
+      "best_sharpe": 1.3214500783238177,
+      "population_size": 6
+    },
+    {
+      "generation": 13,
+      "best_score": 0.6607250391619088,
+      "best_sharpe": 1.3214500783238177,
+      "population_size": 6
+    },
+    {
+      "generation": 14,
+      "best_score": 0.6607250391619088,
+      "best_sharpe": 1.3214500783238177,
+      "population_size": 5
+    },
+    {
+      "generation": 15,
+      "best_score": 0.6607250391619088,
+      "best_sharpe": 1.3214500783238177,
+      "population_size": 7
+    }
+  ],
+  "evolution_config": {
+    "generations": 15,
+    "population_size": 10,
+    "data_days": 180,
+    "enable_shorts": false
+  },
+  "created": "2025-12-17T06:42:16.555768"
+}

@@ -47,6 +47,14 @@ class Settings(BaseSettings):
 
     # Discord Notifications
     discord_webhook_url: str = Field(default="", description="Discord webhook URL for notifications")
+    discord_batch_trades: bool = Field(default=False, description="Batch trade notifications (opt-in)")
+    discord_batch_interval: int = Field(default=300, description="Batch interval in seconds (5 min default)")
+
+    # Warning Thresholds (for early warning alerts before kill switches)
+    drawdown_warning_pct: float = Field(default=0.03, description="3% - send warning")
+    drawdown_elevated_pct: float = Field(default=0.05, description="5% - elevated warning")
+    drawdown_critical_pct: float = Field(default=0.10, description="10% - critical warning")
+    position_warning_pct: float = Field(default=0.015, description="1.5% - position warning threshold")
 
     @property
     def discord_enabled(self) -> bool:

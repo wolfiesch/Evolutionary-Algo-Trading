@@ -1,0 +1,8 @@
+{
+    "strategy_name": "RSI_Bounce_V1",
+    "rationale": "ProFiT-style seed: Simple RSI oversold bounce. Classic mean reversion pattern with loose thresholds.",
+    "entry_long": "btc_trend(60) >= 0 AND norm_rsi(14) < -0.4",
+    "exit_long": "norm_rsi(14) > 0.3",
+    "source": "ProFiT paper methodology - RSI mean reversion",
+    "category": "mean_reversion"
+}
